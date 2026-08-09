@@ -1,0 +1,28 @@
+:root { color-scheme: light; font-family: Inter, system-ui, sans-serif; color: #242127; background: #f7f5fa; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; }
+button { font: inherit; }
+.shell { min-height: 100vh; display: grid; grid-template-columns: minmax(260px, 340px) 1fr; }
+.sidebar { padding: 24px; overflow-y: auto; border-right: 1px solid #ddd8e2; background: rgba(255,255,255,.72); }
+header h1 { margin: 0; font-size: 1.7rem; } header p, .muted { color: #716b76; margin-top: 4px; }
+h2 { margin: 28px 0 10px; font-size: .78rem; text-transform: uppercase; letter-spacing: .1em; color: #716b76; }
+.apps { display: grid; gap: 7px; }
+.app { border: 0; background: transparent; border-radius: 13px; display: grid; grid-template-columns: 42px 1fr; grid-template-rows: 1fr 1fr; text-align: left; padding: 8px; cursor: pointer; color: inherit; }
+.app:hover, .app:focus-visible { background: #eee9f3; outline: none; }
+.app-icon { grid-row: 1 / 3; width: 38px; height: 38px; display: grid; place-items: center; border-radius: 11px; color: white; background: linear-gradient(145deg,#7357a9,#4f3880); font-weight: 700; }
+.app-name { align-self: end; font-weight: 650; } .app small { color: #77717c; align-self: start; }
+.stage { min-width: 0; display: flex; flex-direction: column; }
+.welcome { margin: auto; padding: 32px; text-align: center; color: #716b76; }
+.welcome span { width: 72px; height: 72px; display: grid; place-items: center; margin: auto; border-radius: 22px; background: #6750a4; color: white; font-size: 2rem; font-weight: 700; }
+.welcome h2 { color: #302b35; font-size: 1.25rem; text-transform: none; letter-spacing: 0; margin-bottom: 0; }
+.app-bar { min-height: 58px; display: flex; align-items: center; gap: 18px; padding: 8px 16px; background: white; border-bottom: 1px solid #ddd8e2; }
+.app-bar button { border: 0; border-radius: 9px; padding: 9px 13px; background: #eee9f3; cursor: pointer; }
+iframe { flex: 1; width: 100%; border: 0; background: white; }
+.error { color: #a02626; }
+@media (max-width: 700px) {
+  .shell { display: block; }
+  .sidebar { min-height: 100vh; border: 0; padding: max(20px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom)); }
+  .stage { display: none; position: fixed; inset: 0; background: white; z-index: 2; }
+  .stage.open { display: flex; }
+  .app-bar { padding-top: max(8px, env(safe-area-inset-top)); }
+}
