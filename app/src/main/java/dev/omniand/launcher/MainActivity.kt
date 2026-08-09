@@ -19,9 +19,10 @@ class MainActivity : Activity() {
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
+            settings.userAgentString = "${settings.userAgentString} OmniAndLauncher/1.0"
             webViewClient = WebViewClient()
             webChromeClient = WebChromeClient()
-            loadUrl("http://127.0.0.1:${PlatformServer.LAUNCHER_PORT}/")
+            loadUrl("http://localhost:${PlatformServer.PORT}/")
         }
         setContentView(webView)
 

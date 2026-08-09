@@ -46,19 +46,19 @@ app/src/main/
 
 The Web files live under Android assets so Gradle packages them into the APK. The HTTP server reads and serves those assets; the WebView must not load them with `file://` URLs.
 
-## HTTP origins and ports
+## HTTP origins and virtual hosts
 
-The POC uses separate ports as separate Web origins:
+The POC uses separate hostnames on one port as separate Web origins:
 
-| Port | Application | Permissions |
+| Host | Application | Permissions |
 |---|---|---|
-| `8080` | Launcher shell | Launcher APIs |
-| `8081` | Messages | `sms.read` |
-| `8082` | Permission test | None |
+| `localhost:8080` | Launcher shell | Launcher APIs |
+| `messages.localhost:8080` | Messages | `sms.read` |
+| `test.localhost:8080` | Permission test | None |
 
 Do not replace this with path-based isolation. Paths on one host and port share an origin and are not a security boundary.
 
-`PlatformServer` maps the listener port to an application identity. `PermissionManager` checks that identity before allowing protected APIs. Keep routing structured so host-based origins can replace port-based origins later.
+`PlatformServer` serves the launcher when the HTTP host has no registered app prefix. A registered app ID is prepended to the launcher host to form that app's origin. `PermissionManager` checks this identity before allowing protected APIs.
 
 ## Security expectations
 
@@ -75,9 +75,8 @@ Do not replace this with path-based isolation. Paths on one host and port share 
 
 1. Create a directory under `app/src/main/assets/web/apps/<app-id>/`.
 2. Add a small `manifest.json`, `index.html`, JavaScript, and optional CSS.
-3. Register the app and a unique port in `WebAppRegistry.kt`.
-4. Add its port to the listeners in `PlatformServer.kt`.
-5. Add the origin to the launcher CSP in `CspBuilder.kt`.
+3. Register the app with a unique ID in `WebAppRegistry.kt`; the ID becomes its hostname label.
+4. Ensure the generated origin is included by the launcher CSP in `CspBuilder.kt`.
 6. Grant only the capabilities the app requires.
 7. Ensure its frontend uses relative same-origin API URLs such as `fetch("/api/sms")`.
 
@@ -119,14 +118,12 @@ For the full POC, verify all of the following on an Android device or AVD:
 4. Messages displays SMS after Android grants `READ_SMS`.
 5. Messages reports a useful error when permission is denied.
 6. The test app receives `403 Forbidden` from `/api/sms`.
-7. With ports 8080–8082 forwarded or reachable over the LAN, desktop Firefox can use the same launcher and Messages app.
+7. With port 8080 forwarded or reachable over the LAN, desktop Firefox can use the same launcher and Messages app through their distinct hostnames.
 
 Useful ADB forwarding for an emulator:
 
 ```sh
 adb forward tcp:8080 tcp:8080
-adb forward tcp:8081 tcp:8081
-adb forward tcp:8082 tcp:8082
 ```
 
 ## Scope control

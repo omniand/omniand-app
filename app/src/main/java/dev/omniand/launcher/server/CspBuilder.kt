@@ -14,13 +14,13 @@ object CspBuilder {
         "object-src 'none'"
     ).joinToString("; ")
 
-    fun buildShell(host: String): String = listOf(
+    fun buildShell(appOrigins: List<String>): String = listOf(
         "default-src 'self'",
         "script-src 'self'",
         "style-src 'self' 'unsafe-inline'",
         "img-src 'self' data:",
         "connect-src 'self'",
-        "frame-src http://$host:8081 http://$host:8082",
+        "frame-src ${appOrigins.joinToString(" ")}",
         "base-uri 'none'",
         "object-src 'none'"
     ).joinToString("; ")

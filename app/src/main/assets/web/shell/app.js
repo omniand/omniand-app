@@ -1,7 +1,9 @@
 const androidList = document.querySelector('#android-apps');
+const androidSection = document.querySelector('#android-apps-section');
 const webList = document.querySelector('#web-apps');
 const stage = document.querySelector('#stage');
 const template = document.querySelector('#app-template');
+const isAndroidLauncher = navigator.userAgent.includes('OmniAndLauncher/');
 
 function appButton(name, subtitle, action) {
   const button = template.content.firstElementChild.cloneNode(true);
@@ -14,12 +16,16 @@ function appButton(name, subtitle, action) {
 
 async function loadApps() {
   try {
-    const [androidResponse, webResponse] = await Promise.all([
-      fetch('/api/apps/android'), fetch('/api/apps/web')
-    ]);
-    const [androidApps, webApps] = await Promise.all([androidResponse.json(), webResponse.json()]);
+    const webResponse = await fetch('/api/apps/web');
+    const webApps = await webResponse.json();
     webList.replaceChildren(...webApps.map(app => appButton(app.name, 'Web app', () => openWebApp(app))));
-    androidList.replaceChildren(...androidApps.map(app => appButton(app.name, 'Android · phone only', () => launchAndroid(app))));
+
+    if (isAndroidLauncher) {
+      const androidResponse = await fetch('/api/apps/android');
+      const androidApps = await androidResponse.json();
+      androidList.replaceChildren(...androidApps.map(app => appButton(app.name, 'Android · phone only', () => launchAndroid(app))));
+      androidSection.hidden = false;
+    }
   } catch (error) {
     webList.innerHTML = `<p class="error">Could not reach the phone server.</p>`;
     androidList.replaceChildren();

@@ -1,6 +1,7 @@
 package dev.omniand.launcher.server
 
 import android.content.Context
+import android.util.Log
 import dev.omniand.launcher.permissions.PermissionManager
 import dev.omniand.launcher.services.AndroidAppsService
 import dev.omniand.launcher.services.SmsService
@@ -18,32 +19,31 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 object PlatformServer {
-    const val LAUNCHER_PORT = 8080
+    const val PORT = 8080
     private val started = AtomicBoolean(false)
     private val workers = Executors.newCachedThreadPool()
 
     fun start(context: Context) {
         if (!started.compareAndSet(false, true)) return
         val appContext = context.applicationContext
-        val ready = CountDownLatch(3)
-        listOf(LAUNCHER_PORT, 8081, 8082).forEach { port ->
-            Thread({ serve(appContext, port, ready) }, "platform-http-$port").apply {
-                isDaemon = true
-                start()
-            }
+        val ready = CountDownLatch(1)
+        Thread({ serve(appContext, ready) }, "platform-http-$PORT").apply {
+            isDaemon = true
+            start()
         }
         ready.await(2, TimeUnit.SECONDS)
     }
 
-    private fun serve(context: Context, port: Int, ready: CountDownLatch) {
+    private fun serve(context: Context, ready: CountDownLatch) {
         try {
-            ServerSocket(port, 50, InetAddress.getByName("0.0.0.0")).use { server ->
+            ServerSocket(PORT, 50, InetAddress.getByName("0.0.0.0")).use { server ->
                 ready.countDown()
                 while (!server.isClosed) {
                     val socket = server.accept()
                     workers.execute {
                         socket.use { client ->
-                            runCatching { handle(context, port, client.getInputStream().bufferedReader(), client.getOutputStream()) }
+                            runCatching { handle(context, client.getInputStream().bufferedReader(), client.getOutputStream()) }
+                                .onFailure { Log.e(TAG, "HTTP request failed", it) }
                         }
                     }
                 }
@@ -54,7 +54,7 @@ object PlatformServer {
         }
     }
 
-    private fun handle(context: Context, port: Int, reader: BufferedReader, output: java.io.OutputStream) {
+    private fun handle(context: Context, reader: BufferedReader, output: java.io.OutputStream) {
         val request = reader.readLine() ?: return
         val parts = request.split(' ')
         if (parts.size < 2) return
@@ -67,7 +67,7 @@ object PlatformServer {
             if (line.startsWith("Host:", true)) host = line.substringAfter(':').trim().substringBefore(':')
         }
 
-        val response = route(context, port, method, path, host)
+        val response = route(context, method, path, host.lowercase())
         val bytes = response.body
         val headers = buildString {
             append("HTTP/1.1 ${response.status}\r\n")
@@ -84,10 +84,10 @@ object PlatformServer {
         output.flush()
     }
 
-    private fun route(context: Context, port: Int, method: String, path: String, host: String): Response {
-        val app = WebAppRegistry.byPort(port)
+    private fun route(context: Context, method: String, path: String, host: String): Response {
+        val app = WebAppRegistry.byHost(host)
         if (path == "/api/sms" && method == "GET") return sms(context, app)
-        if (port == LAUNCHER_PORT) {
+        if (WebAppRegistry.isLauncherHost(host)) {
             if (path == "/api/apps/android" && method == "GET") {
                 return json(200, AndroidAppsService(context).list())
             }
@@ -96,7 +96,7 @@ object PlatformServer {
                     WebAppRegistry.apps.forEach { item ->
                         put(JSONObject()
                             .put("id", item.id).put("name", item.name)
-                            .put("origin", "http://$host:${item.port}")
+                            .put("origin", WebAppRegistry.originFor(item, host, PORT))
                             .put("icon", JSONObject.NULL)
                             .put("permissions", JSONArray(item.permissions.toList())))
                     }
@@ -112,8 +112,9 @@ object PlatformServer {
             }
         }
 
-        val root = app?.assetRoot ?: "web/shell"
-        return static(context, root, path, app, host)
+        if (app != null) return static(context, app.assetRoot, path, app, host)
+        if (WebAppRegistry.isLauncherHost(host)) return static(context, "web/shell", path, null, host)
+        return error(404, "Unknown application origin")
     }
 
     private fun sms(context: Context, app: WebApp?): Response {
@@ -132,7 +133,8 @@ object PlatformServer {
         if (relative.contains("..")) return error(400, "Invalid path")
         return try {
             val bytes = context.assets.open("$root/$relative").use { it.readBytes() }
-            val csp = app?.let(CspBuilder::build) ?: CspBuilder.buildShell(host)
+            val origins = WebAppRegistry.apps.map { WebAppRegistry.originFor(it, host, PORT) }
+            val csp = app?.let(CspBuilder::build) ?: CspBuilder.buildShell(origins)
             Response("200 OK", mime(relative), bytes, csp)
         } catch (_: Exception) {
             error(404, "Not found")
@@ -151,4 +153,6 @@ object PlatformServer {
     }
 
     private data class Response(val status: String, val contentType: String, val body: ByteArray, val csp: String? = null)
+
+    private const val TAG = "OmniAndHttp"
 }
