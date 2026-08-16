@@ -21,7 +21,7 @@ object LocalOriginRouter {
         val host = uri.host ?: return null
         val path = uri.encodedPath.orEmpty().ifEmpty { "/" } +
             uri.encodedQuery?.let { "?$it" }.orEmpty()
-        val response = PlatformServer.localResponse(context, request.method, path, host)
+        val response = PlatformServer.localResponse(context, request.method, path, host, request.requestHeaders)
         val contentType = response.contentType.substringBefore(';')
         val encoding = response.contentType.substringAfter("charset=", "utf-8")
         return WebResourceResponse(

@@ -65,9 +65,12 @@ object PlatformServer {
         val path = parts[1].substringBefore('?')
         var host = "127.0.0.1"
         var contentLength = 0
+        val requestHeaders = mutableMapOf<String, String>()
         while (true) {
             val line = reader.readLine() ?: break
             if (line.isEmpty()) break
+            val name = line.substringBefore(':', "").trim().lowercase()
+            if (name.isNotEmpty()) requestHeaders[name] = line.substringAfter(':').trim()
             if (line.startsWith("Host:", true)) host = line.substringAfter(':').trim().substringBefore(':')
             if (line.startsWith("Content-Length:", true)) contentLength = line.substringAfter(':').trim().toIntOrNull() ?: 0
         }
@@ -84,7 +87,7 @@ object PlatformServer {
             }
         }
 
-        val response = route(context, method, path, host.lowercase(), isLocalWebView = false)
+        val response = route(context, method, path, host.lowercase(), isLocalWebView = false, requestHeaders)
         write(output, response)
     }
 
@@ -105,20 +108,45 @@ object PlatformServer {
         output.flush()
     }
 
-    fun localResponse(context: Context, method: String, path: String, host: String): Response =
-        route(context.applicationContext, method, path.substringBefore('?'), host.lowercase(), isLocalWebView = true)
+    fun localResponse(context: Context, method: String, path: String, host: String, headers: Map<String, String> = emptyMap()): Response =
+        route(context.applicationContext, method, path.substringBefore('?'), host.lowercase(), isLocalWebView = true,
+            headers.mapKeys { it.key.lowercase() })
 
-    private fun route(context: Context, method: String, path: String, host: String, isLocalWebView: Boolean): Response {
+    private fun route(context: Context, method: String, path: String, host: String, isLocalWebView: Boolean, headers: Map<String, String>): Response {
         val app = WebAppRegistry.byHost(context, host)
         if (path == "/api/sms" && method == "GET") return sms(context, app)
         if (path == "/api/sms/threads" && method == "GET") return sms(context, app) { it.threads() }
+        if (path == "/api/sms/messages" && method == "POST") {
+            return smsMutation(context, app, "sms.send") {
+                it.send(requiredHeader(headers, "x-omniand-sms-address"), requiredHeader(headers, "x-omniand-sms-body"))
+            }
+        }
         val threadMessages = Regex("^/api/sms/threads/([^/]+)/messages$").matchEntire(path)
         if (threadMessages != null && method == "GET") {
             return sms(context, app) { it.messages(threadMessages.groupValues[1]) }
         }
+        val thread = Regex("^/api/sms/threads/([^/]+)$").matchEntire(path)
+        if (thread != null && method == "DELETE") {
+            return smsMutation(context, app, "sms.modify") { it.deleteThread(thread.groupValues[1]) }
+        }
+        val threadRead = Regex("^/api/sms/threads/([^/]+)/read$").matchEntire(path)
+        if (threadRead != null && method == "POST") {
+            return smsMutation(context, app, "sms.modify") {
+                it.setThreadRead(threadRead.groupValues[1], requiredHeader(headers, "x-omniand-sms-read"))
+            }
+        }
+        val messageRead = Regex("^/api/sms/messages/([^/]+)/read$").matchEntire(path)
+        if (messageRead != null && method == "POST") {
+            return smsMutation(context, app, "sms.modify") {
+                it.setRead(messageRead.groupValues[1], requiredHeader(headers, "x-omniand-sms-read"))
+            }
+        }
         val singleMessage = Regex("^/api/sms/messages/([^/]+)$").matchEntire(path)
         if (singleMessage != null && method == "GET") {
             return sms(context, app) { it.message(singleMessage.groupValues[1]) }
+        }
+        if (singleMessage != null && method == "DELETE") {
+            return smsMutation(context, app, "sms.modify") { it.deleteMessage(singleMessage.groupValues[1]) }
         }
         if (path == "/api/store/config" && method == "GET" && app?.id == "store") {
             return json(200, JSONObject()
@@ -214,6 +242,30 @@ object PlatformServer {
             error(500, "Unable to read SMS messages")
         }
     }
+
+    private fun smsMutation(context: Context, app: WebApp?, capability: String, operation: (SmsService) -> Any): Response {
+        if (!PermissionManager.hasCapability(context, app?.id, capability)) return error(403, "Missing capability: $capability")
+        return try {
+            json(200, operation(SmsService(context)))
+        } catch (_: SmsService.PermissionMissing) {
+            error(403, "Required Android SMS permission or default SMS role is missing")
+        } catch (_: SmsService.InvalidInput) {
+            error(400, "Invalid SMS request")
+        } catch (_: SmsService.InvalidId) {
+            error(400, "Invalid SMS identifier")
+        } catch (_: SmsService.NotFound) {
+            error(404, "SMS resource not found")
+        } catch (error: SecurityException) {
+            Log.w(TAG, "SMS mutation denied by Android", error)
+            error(403, "Android requires OmniAnd to be the default SMS application for this action")
+        } catch (error: Exception) {
+            Log.e(TAG, "SMS mutation failed", error)
+            error(500, "Unable to change SMS messages")
+        }
+    }
+
+    private fun requiredHeader(headers: Map<String, String>, name: String): String =
+        headers[name]?.let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrNull() } ?: throw SmsService.InvalidInput()
 
     private fun removeWebApp(context: Context, id: String, isLocalWebView: Boolean): Response {
         return try {

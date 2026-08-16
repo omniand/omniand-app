@@ -41,8 +41,10 @@ class MainActivity : Activity() {
         }
         setContentView(webView)
 
-        if (checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.READ_SMS), SMS_PERMISSION_REQUEST)
+        val missingSmsPermissions = arrayOf(Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS)
+            .filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (missingSmsPermissions.isNotEmpty()) {
+            requestPermissions(missingSmsPermissions.toTypedArray(), SMS_PERMISSION_REQUEST)
         }
     }
 
