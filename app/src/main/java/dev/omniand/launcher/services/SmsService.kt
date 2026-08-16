@@ -4,11 +4,16 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.content.ContentValues
+import android.app.PendingIntent
+import android.content.Intent
+import android.net.Uri
 import android.telephony.SmsManager
 import android.provider.Telephony
 import org.json.JSONArray
 import org.json.JSONObject
 import dev.omniand.launcher.sms.SmsSetupManager
+import dev.omniand.launcher.sms.SmsSendResultReceiver
+import dev.omniand.launcher.sms.SmsSendTracker
 
 data class SmsRecord(
     val id: String,
@@ -90,10 +95,42 @@ class SmsService(private val context: Context) {
         if (address.isBlank() || address.length > 100 || body.isBlank() || body.length > 2_000) throw InvalidInput()
         val manager = SmsManager.getDefault()
         val parts = manager.divideMessage(body)
-        if (parts.size > 1) manager.sendMultipartTextMessage(address, null, parts, null, null)
-        else manager.sendTextMessage(address, null, body, null, null)
-        return JSONObject().put("sent", true)
+        val messageUri = persistOutgoing(address, body)
+        val messageId = messageUri.lastPathSegment ?: throw IllegalStateException("SMS provider returned no identifier")
+        SmsSendTracker.start(context, messageId, parts.size)
+        val callbacks = ArrayList(parts.indices.map { part -> sentCallback(messageId, part, parts.size) })
+        try {
+            if (parts.size > 1) manager.sendMultipartTextMessage(address, null, parts, callbacks, null)
+            else manager.sendTextMessage(address, null, body, callbacks.single(), null)
+        } catch (error: Exception) {
+            SmsSendTracker.failImmediately(context, messageId)
+            throw error
+        }
+        return JSONObject().put("sent", true).put("id", messageId)
     }
+
+    private fun persistOutgoing(address: String, body: String): Uri {
+        requireRole()
+        val now = System.currentTimeMillis()
+        return context.contentResolver.insert(Telephony.Sms.Outbox.CONTENT_URI, ContentValues().apply {
+            put(Telephony.Sms.ADDRESS, address)
+            put(Telephony.Sms.BODY, body)
+            put(Telephony.Sms.DATE, now)
+            put(Telephony.Sms.DATE_SENT, 0)
+            put(Telephony.Sms.READ, 1)
+            put(Telephony.Sms.SEEN, 1)
+            put(Telephony.Sms.STATUS, Telephony.Sms.STATUS_PENDING)
+            put(Telephony.Sms.ERROR_CODE, 0)
+        }) ?: throw IllegalStateException("Unable to store outgoing SMS")
+    }
+
+    private fun sentCallback(messageId: String, part: Int, partCount: Int): PendingIntent =
+        PendingIntent.getBroadcast(context, messageId.hashCode() * 31 + part,
+            Intent(context, SmsSendResultReceiver::class.java)
+                .putExtra(SmsSendResultReceiver.EXTRA_MESSAGE_ID, messageId)
+                .putExtra(SmsSendResultReceiver.EXTRA_PART, part)
+                .putExtra(SmsSendResultReceiver.EXTRA_PART_COUNT, partCount),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
     fun setRead(rawMessageId: String, rawRead: String): JSONObject {
         requireRole()

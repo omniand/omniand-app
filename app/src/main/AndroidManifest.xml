@@ -72,6 +72,9 @@
                 <data android:mimeType="application/vnd.wap.mms-message" />
             </intent-filter>
         </receiver>
+        <receiver
+            android:name=".sms.SmsSendResultReceiver"
+            android:exported="false" />
         <service
             android:name=".sms.RespondViaMessageService"
             android:exported="true"

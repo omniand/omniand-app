@@ -28,6 +28,7 @@ class IncomingSmsReceiver : BroadcastReceiver() {
     }
 
     private fun persist(context: Context, intent: Intent) {
+        val receivedAt = System.currentTimeMillis()
         val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
         val subscriptionId = intent.getIntExtra("subscription", -1)
         val message = IncomingSmsAssembler.assemble(messages.map {
@@ -38,7 +39,7 @@ class IncomingSmsReceiver : BroadcastReceiver() {
         val values = ContentValues().apply {
             put(Telephony.Sms.ADDRESS, message.address)
             put(Telephony.Sms.BODY, message.body)
-            put(Telephony.Sms.DATE, message.timestamp)
+            put(Telephony.Sms.DATE, receivedAt)
             put(Telephony.Sms.DATE_SENT, message.timestamp)
             put(Telephony.Sms.READ, 0)
             put(Telephony.Sms.SEEN, 0)
@@ -51,7 +52,7 @@ class IncomingSmsReceiver : BroadcastReceiver() {
             val threadId = context.contentResolver.query(uri, arrayOf(Telephony.Sms.THREAD_ID), null, null, null)?.use {
                 if (it.moveToFirst()) it.getString(0) else null
             } ?: id
-            SmsNotifications.publish(context, threadId, message.address.ifBlank { "New message" }, message.body, message.timestamp)
+            SmsNotifications.publish(context, threadId, message.address.ifBlank { "New message" }, message.body, receivedAt)
         } catch (error: Exception) {
             DedupLedger.release(context, fingerprint)
             throw error
