@@ -111,6 +111,15 @@ object PlatformServer {
     private fun route(context: Context, method: String, path: String, host: String, isLocalWebView: Boolean): Response {
         val app = WebAppRegistry.byHost(context, host)
         if (path == "/api/sms" && method == "GET") return sms(context, app)
+        if (path == "/api/sms/threads" && method == "GET") return sms(context, app) { it.threads() }
+        val threadMessages = Regex("^/api/sms/threads/([^/]+)/messages$").matchEntire(path)
+        if (threadMessages != null && method == "GET") {
+            return sms(context, app) { it.messages(threadMessages.groupValues[1]) }
+        }
+        val singleMessage = Regex("^/api/sms/messages/([^/]+)$").matchEntire(path)
+        if (singleMessage != null && method == "GET") {
+            return sms(context, app) { it.message(singleMessage.groupValues[1]) }
+        }
         if (path == "/api/store/config" && method == "GET" && app?.id == "store") {
             return json(200, JSONObject()
                 .put("storeUrl", BuildConfig.STORE_URL)
@@ -188,11 +197,19 @@ object PlatformServer {
     }
 
     private fun sms(context: Context, app: WebApp?): Response {
+        return sms(context, app) { it.recent() }
+    }
+
+    private fun sms(context: Context, app: WebApp?, operation: (SmsService) -> Any): Response {
         if (!PermissionManager.hasCapability(context, app?.id, "sms.read")) return error(403, "Missing capability: sms.read")
         return try {
-            json(200, SmsService(context).recent())
+            json(200, operation(SmsService(context)))
         } catch (_: SmsService.PermissionMissing) {
             error(403, "Android SMS permission has not been granted")
+        } catch (_: SmsService.InvalidId) {
+            error(400, "Invalid SMS identifier")
+        } catch (_: SmsService.NotFound) {
+            error(404, "SMS resource not found")
         } catch (_: Exception) {
             error(500, "Unable to read SMS messages")
         }
@@ -261,6 +278,11 @@ object PlatformServer {
         path.endsWith(".js") -> "text/javascript; charset=utf-8"
         path.endsWith(".css") -> "text/css; charset=utf-8"
         path.endsWith(".json") -> "application/json; charset=utf-8"
+        path.endsWith(".png") -> "image/png"
+        path.endsWith(".jpg") || path.endsWith(".jpeg") -> "image/jpeg"
+        path.endsWith(".svg") -> "image/svg+xml"
+        path.endsWith(".woff") -> "font/woff"
+        path.endsWith(".woff2") -> "font/woff2"
         else -> "application/octet-stream"
     }
 
