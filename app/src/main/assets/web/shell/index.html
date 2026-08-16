@@ -1,44 +1,42 @@
 <!doctype html>
-<html lang="fr">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#17263f">
+  <meta name="theme-color" content="#f6f7f9">
   <title>OmniAnd</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <main class="shell">
-    <section id="home" class="home" aria-label="Écran d’accueil">
-      <header class="hero">
-        <div class="clock" aria-live="off">
-          <time id="time">--:--</time>
-          <span id="date"></span>
-        </div>
-        <div class="brand"><span class="brand-mark">O</span><span>OmniAnd</span></div>
-      </header>
-
-      <div class="catalog">
-        <section class="app-section" aria-labelledby="web-title">
-          <h1 id="web-title">Applications Web</h1>
-          <div id="web-apps" class="apps"><p class="muted">Chargement…</p></div>
-        </section>
-        <section id="android-apps-section" class="app-section" aria-labelledby="android-title" hidden>
-          <h2 id="android-title">Applications Android</h2>
-          <div id="android-apps" class="apps"><p class="muted">Chargement…</p></div>
-        </section>
+  <main>
+    <header>
+      <span class="brand-mark" aria-hidden="true">O</span>
+      <div>
+        <h1>My Web Apps</h1>
+        <p>Hosted by this phone and available on your other devices.</p>
       </div>
-      <p class="hint">Touchez une icône pour ouvrir une application</p>
-    </section>
+    </header>
 
-    <section id="stage" class="stage" aria-live="polite"></section>
+    <section aria-labelledby="apps-title">
+      <div class="section-heading">
+        <h2 id="apps-title">Installed apps</h2>
+        <button id="refresh" class="secondary" type="button">Refresh</button>
+      </div>
+      <div id="web-apps" class="apps" aria-live="polite"><p class="state">Loading…</p></div>
+    </section>
   </main>
 
   <template id="app-template">
-    <button class="app" type="button">
-      <span class="app-icon" aria-hidden="true"></span>
-      <span class="app-name"></span>
-    </button>
+    <article class="app-card">
+      <div class="app-identity">
+        <span class="app-mark" aria-hidden="true"></span>
+        <div><h3 class="app-name"></h3><p class="app-origin"></p></div>
+      </div>
+      <div class="actions">
+        <button class="open primary" type="button">Open</button>
+        <button class="integration secondary" type="button" hidden></button>
+      </div>
+    </article>
   </template>
   <script src="/app.js" defer></script>
 </body>

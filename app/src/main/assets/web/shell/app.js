@@ -1,109 +1,69 @@
-const androidList = document.querySelector('#android-apps');
-const androidSection = document.querySelector('#android-apps-section');
 const webList = document.querySelector('#web-apps');
-const stage = document.querySelector('#stage');
-const home = document.querySelector('#home');
 const template = document.querySelector('#app-template');
-const time = document.querySelector('#time');
-const date = document.querySelector('#date');
-const isAndroidLauncher = navigator.userAgent.includes('OmniAndLauncher/');
+const refresh = document.querySelector('#refresh');
+const isAndroidPlatform = navigator.userAgent.includes('OmniAndPlatform/');
 
-const webIcons = {
-  store: '<svg viewBox="0 0 48 48"><path d="M11 18h26l-2 21H13z"/><path d="M18 20v-5a6 6 0 0 1 12 0v5"/></svg>',
-  messages: '<svg viewBox="0 0 48 48"><path d="M10 11h28v21H22l-9 7 2-7h-5z"/><path d="M16 18h16M16 24h11"/></svg>',
-  test: '<svg viewBox="0 0 48 48"><path d="M19 9h10M21 9v9L12 35a3 3 0 0 0 3 4h18a3 3 0 0 0 3-4l-9-17V9"/><path d="M17 30h14"/></svg>'
-};
-
-function updateClock() {
-  const now = new Date();
-  time.textContent = new Intl.DateTimeFormat('fr-FR', {hour: '2-digit', minute: '2-digit'}).format(now);
-  date.textContent = new Intl.DateTimeFormat('fr-FR', {weekday: 'long', day: 'numeric', month: 'long'}).format(now);
-}
-
-function appButton(app, type, action) {
-  const button = template.content.firstElementChild.cloneNode(true);
-  const icon = button.querySelector('.app-icon');
-  button.querySelector('.app-name').textContent = app.name;
-  button.title = app.name;
-  button.setAttribute('aria-label', `Ouvrir ${app.name}`);
-  icon.classList.add(type === 'web' ? `web-${app.id}` : 'android-icon');
-
-  if (type === 'web' && webIcons[app.id]) {
-    icon.innerHTML = webIcons[app.id];
-  } else if (type === 'android') {
+function appCard(app) {
+  const card = template.content.firstElementChild.cloneNode(true);
+  card.querySelector('.app-name').textContent = app.name;
+  card.querySelector('.app-origin').textContent = new URL(app.origin).host;
+  const mark = card.querySelector('.app-mark');
+  if (app.icon) {
     const image = document.createElement('img');
-    image.src = `/api/apps/android/${encodeURIComponent(app.package)}/icon`;
+    image.src = app.icon;
     image.alt = '';
     image.addEventListener('error', () => {
       image.remove();
-      icon.textContent = app.name.slice(0, 1).toUpperCase();
+      mark.textContent = app.name.slice(0, 1).toUpperCase();
     });
-    icon.append(image);
+    mark.append(image);
   } else {
-    icon.textContent = app.name.slice(0, 1).toUpperCase();
+    mark.textContent = app.name.slice(0, 1).toUpperCase();
   }
+  card.querySelector('.open').addEventListener('click', () => window.location.assign(`${app.origin}/`));
 
-  button.addEventListener('click', action);
-  return button;
+  const integration = card.querySelector('.integration');
+  if (isAndroidPlatform && app.androidIntegration?.supported) {
+    integration.hidden = false;
+    integration.disabled = app.androidIntegration.installed;
+    integration.textContent = app.androidIntegration.installed ? 'Added to Android' : 'Add to Android';
+    integration.addEventListener('click', () => addAndroidIntegration(app, integration));
+  }
+  return card;
 }
 
 async function loadApps() {
+  refresh.disabled = true;
   try {
-    const webResponse = await fetch('/api/apps/web');
-    if (!webResponse.ok) throw new Error('Web apps unavailable');
-    const webApps = await webResponse.json();
-    webList.replaceChildren(...webApps.map(app => appButton(app, 'web', () => openWebApp(app))));
+    const response = await fetch('/api/apps/web');
+    if (!response.ok) throw new Error('Web apps unavailable');
+    const apps = await response.json();
+    webList.replaceChildren(...apps.map(appCard));
+  } catch (_) {
+    webList.innerHTML = '<p class="state error">Unable to reach the platform server.</p>';
+  } finally {
+    refresh.disabled = false;
+  }
+}
 
-    if (isAndroidLauncher) {
-      const androidResponse = await fetch('/api/apps/android');
-      if (!androidResponse.ok) throw new Error('Android apps unavailable');
-      const androidApps = await androidResponse.json();
-      androidList.replaceChildren(...androidApps.map(app => appButton(app, 'android', () => launchAndroid(app))));
-      androidSection.hidden = false;
+async function addAndroidIntegration(app, button) {
+  button.disabled = true;
+  try {
+    const response = await fetch(`/api/apps/web/${encodeURIComponent(app.id)}/integrate`, {method: 'POST'});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Android integration unavailable');
+    if (result.status === 'permission-required') {
+      alert('Allow OmniAnd to install apps, then select “Add to Android” again.');
+      button.disabled = false;
+    } else {
+      button.textContent = 'Installing…';
     }
   } catch (error) {
-    webList.innerHTML = '<p class="error">Impossible de joindre le serveur du téléphone.</p>';
-    androidList.replaceChildren();
+    alert(error.message);
+    button.disabled = false;
   }
 }
 
-function openWebApp(app) {
-  const frame = document.createElement('iframe');
-  frame.src = `${app.origin}/`;
-  frame.title = app.name;
-  frame.sandbox = 'allow-scripts allow-same-origin';
-  const bar = document.createElement('div');
-  bar.className = 'app-bar';
-  const close = document.createElement('button');
-  close.type = 'button';
-  close.className = 'back';
-  close.setAttribute('aria-label', 'Retour aux applications');
-  close.textContent = '‹';
-  close.addEventListener('click', closeApp);
-  const title = document.createElement('strong');
-  title.textContent = app.name;
-  bar.append(close, title);
-  stage.replaceChildren(bar, frame);
-  home.setAttribute('aria-hidden', 'true');
-  stage.classList.add('open');
-}
-
-function closeApp() {
-  stage.classList.remove('open');
-  stage.replaceChildren();
-  home.removeAttribute('aria-hidden');
-  loadApps();
-}
-
-async function launchAndroid(app) {
-  try {
-    const response = await fetch(`/api/apps/android/${encodeURIComponent(app.package)}/launch`, {method: 'POST'});
-    if (!response.ok) throw new Error();
-  } catch (_) {
-    alert('Cette application Android ne peut être lancée que depuis le téléphone.');
-  }
-}
-
-updateClock();
-setInterval(updateClock, 30000);
+refresh.addEventListener('click', loadApps);
+window.addEventListener('focus', loadApps);
 loadApps();

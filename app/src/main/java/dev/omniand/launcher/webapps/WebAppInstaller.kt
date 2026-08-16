@@ -48,11 +48,17 @@ object WebAppInstaller {
             check(validId.matches(id)) { "Invalid application id" }
             check(name.isNotEmpty() && name.length <= 80) { "Invalid application name" }
             check(id != "store") { "Reserved application id" }
-            val permissions = manifest.optJSONArray("permissions")
-            if (permissions != null) {
-                for (index in 0 until permissions.length()) {
-                    check(permissions.getString(index) in knownCapabilities) { "Unknown capability" }
+            val iconPath = manifest.optString("icon").takeIf(String::isNotBlank)
+            if (iconPath != null) {
+                check(!iconPath.startsWith('/') && !iconPath.contains("..") && iconPath.endsWith(".png", ignoreCase = true)) {
+                    "The application icon must be a relative PNG path"
                 }
+                val icon = File(packageRoot, iconPath)
+                check(icon.isFile && icon.length() <= 512 * 1024) { "Application icon is missing or too large" }
+            }
+            val permissions = manifest.optJSONArray("permissions")
+            if (permissions != null) for (index in 0 until permissions.length()) {
+                check(permissions.getString(index) in knownCapabilities) { "Unknown capability" }
             }
 
             val root = WebAppRegistry.installedRoot(context)

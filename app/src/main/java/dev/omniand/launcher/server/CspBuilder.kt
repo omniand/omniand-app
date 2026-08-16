@@ -15,13 +15,13 @@ object CspBuilder {
         "object-src 'none'"
     ).joinToString("; ")
 
-    fun buildShell(appOrigins: List<String>): String = listOf(
+    fun buildPlatform(): String = listOf(
         "default-src 'self'",
         "script-src 'self'",
         "style-src 'self' 'unsafe-inline'",
         "img-src 'self' data:",
         "connect-src 'self'",
-        "frame-src ${appOrigins.joinToString(" ")}",
+        "frame-src 'none'",
         "base-uri 'none'",
         "object-src 'none'"
     ).joinToString("; ")

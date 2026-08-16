@@ -4,14 +4,15 @@ import android.content.Context
 import android.util.Log
 import dev.omniand.launcher.BuildConfig
 import dev.omniand.launcher.permissions.PermissionManager
-import dev.omniand.launcher.services.AndroidAppsService
 import dev.omniand.launcher.services.SmsService
 import dev.omniand.launcher.webapps.WebApp
 import dev.omniand.launcher.webapps.WebAppInstaller
 import dev.omniand.launcher.webapps.WebAppRegistry
+import dev.omniand.launcher.wrappers.WrapperInstaller
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.io.File
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.URLDecoder
@@ -74,16 +75,16 @@ object PlatformServer {
             write(output, error(413, "Request body is too large"))
             return
         }
-        val body = if (contentLength > 0) CharArray(contentLength).also {
+        if (contentLength > 0) CharArray(contentLength).also {
             var offset = 0
             while (offset < it.size) {
                 val count = reader.read(it, offset, it.size - offset)
                 if (count < 0) break
                 offset += count
             }
-        }.concatToString() else ""
+        }
 
-        val response = route(context, method, path, host.lowercase(), body)
+        val response = route(context, method, path, host.lowercase(), isLocalWebView = false)
         write(output, response)
     }
 
@@ -104,7 +105,10 @@ object PlatformServer {
         output.flush()
     }
 
-    private fun route(context: Context, method: String, path: String, host: String, body: String): Response {
+    fun localResponse(context: Context, method: String, path: String, host: String): Response =
+        route(context.applicationContext, method, path.substringBefore('?'), host.lowercase(), isLocalWebView = true)
+
+    private fun route(context: Context, method: String, path: String, host: String, isLocalWebView: Boolean): Response {
         val app = WebAppRegistry.byHost(context, host)
         if (path == "/api/sms" && method == "GET") return sms(context, app)
         if (path == "/api/store/config" && method == "GET" && app?.id == "store") {
@@ -114,42 +118,73 @@ object PlatformServer {
                     .filter { it.fileRoot != null }
                     .map { it.id })))
         }
-        if (path == "/api/apps/install" && method == "POST") return install(context, app, body)
-        if (path == "/api/apps/uninstall" && method == "POST") return uninstall(context, app, body)
-        if (WebAppRegistry.isLauncherHost(context, host)) {
-            if (path == "/api/apps/android" && method == "GET") {
-                return json(200, AndroidAppsService(context).list())
+        val installPrefix = "/api/apps/install/"
+        if (path.startsWith(installPrefix) && method == "POST") {
+            if (!PermissionManager.hasCapability(context, app?.id, "apps.install")) return error(403, "Missing capability: apps.install")
+            return try {
+                val installed = WebAppInstaller.install(context, URLDecoder.decode(path.removePrefix(installPrefix), "UTF-8"))
+                json(200, JSONObject().put("installed", true).put("id", installed.id).put("name", installed.name).put("version", installed.version))
+            } catch (error: Exception) {
+                Log.w(TAG, "Web application installation rejected", error)
+                error(400, error.message ?: "Unable to install application")
             }
+        }
+        val uninstallPrefix = "/api/apps/uninstall/"
+        if (path.startsWith(uninstallPrefix) && method == "POST") {
+            if (!PermissionManager.hasCapability(context, app?.id, "apps.install")) return error(403, "Missing capability: apps.install")
+            return try {
+                val id = URLDecoder.decode(path.removePrefix(uninstallPrefix), "UTF-8")
+                WebAppInstaller.uninstall(context, id)
+                json(200, JSONObject().put("uninstalled", true).put("id", id))
+            } catch (error: Exception) {
+                Log.w(TAG, "Web application removal rejected", error)
+                error(400, error.message ?: "Unable to remove application")
+            }
+        }
+        if (WebAppRegistry.isPlatformHost(context, host)) {
             if (path == "/api/apps/web" && method == "GET") {
                 val apps = JSONArray().apply {
                     WebAppRegistry.apps(context).forEach { item ->
+                        val integration = WrapperInstaller.state(context, item)
                         put(JSONObject()
                             .put("id", item.id).put("name", item.name)
-                            .put("origin", WebAppRegistry.originFor(item, host, PORT))
-                            .put("icon", JSONObject.NULL)
-                            .put("permissions", JSONArray(item.permissions.toList())))
+                            .put("origin", if (!isLocalWebView) {
+                                WebAppRegistry.developmentOriginFor(item, host, PORT)
+                            } else {
+                                WebAppRegistry.originFor(item)
+                            })
+                            .put("icon", item.iconPath?.let { "/api/apps/web/${item.id}/icon" } ?: JSONObject.NULL)
+                            .put("permissions", JSONArray(item.permissions.toList()))
+                            .put("androidIntegration", JSONObject()
+                                .put("supported", integration.supported)
+                                .put("installed", integration.installed)))
                     }
                 }
                 return json(200, apps)
             }
-            val prefix = "/api/apps/android/"
-            if (path.startsWith(prefix) && path.endsWith("/icon") && method == "GET") {
-                val encoded = path.removePrefix(prefix).removeSuffix("/icon")
-                val packageName = URLDecoder.decode(encoded, "UTF-8")
-                val icon = AndroidAppsService(context).icon(packageName)
-                return if (icon != null) Response("200 OK", "image/png", icon)
-                else error(404, "Application icon not found")
+            val integrationPrefix = "/api/apps/web/"
+            if (path.startsWith(integrationPrefix) && path.endsWith("/icon") && method == "GET") {
+                val appId = URLDecoder.decode(path.removePrefix(integrationPrefix).removeSuffix("/icon"), "UTF-8")
+                val icon = WebAppRegistry.apps(context).firstOrNull { it.id == appId }?.let { readAppIcon(context, it) }
+                return if (icon != null) Response("200 OK", "image/png", icon) else error(404, "Application icon not found")
             }
-            if (path.startsWith(prefix) && path.endsWith("/launch") && method == "POST") {
-                val encoded = path.removePrefix(prefix).removeSuffix("/launch")
-                val packageName = URLDecoder.decode(encoded, "UTF-8")
-                return if (AndroidAppsService(context).launch(packageName)) json(200, JSONObject().put("launched", true))
-                else error(404, "Application is not launchable")
+            if (path.startsWith(integrationPrefix) && path.endsWith("/integrate") && method == "POST") {
+                if (!isLocalWebView) return error(403, "Android integration can only be installed on the phone")
+                val appId = URLDecoder.decode(path.removePrefix(integrationPrefix).removeSuffix("/integrate"), "UTF-8")
+                if (WebAppRegistry.apps(context).none { it.id == appId }) return error(404, "Web application not found")
+                return try {
+                    val appToIntegrate = WebAppRegistry.apps(context).first { it.id == appId }
+                    json(200, JSONObject().put("status", WrapperInstaller.install(context, appToIntegrate)))
+                } catch (error: Exception) {
+                    Log.w(TAG, "Android integration installation failed", error)
+                    error(400, error.message ?: "Unable to install Android integration")
+                }
             }
         }
 
-        if (app != null) return static(context, path, app, host)
-        if (WebAppRegistry.isLauncherHost(context, host)) return staticAsset(context, "web/shell", path, null, host)
+        if (app?.assetRoot != null) return staticAsset(context, app.assetRoot, path, app)
+        if (app?.fileRoot != null) return staticFile(app.fileRoot, path, app)
+        if (WebAppRegistry.isPlatformHost(context, host)) return staticAsset(context, "web/shell", path, null)
         return error(404, "Unknown application origin")
     }
 
@@ -164,51 +199,18 @@ object PlatformServer {
         }
     }
 
-    private fun install(context: Context, app: WebApp?, body: String): Response {
-        if (!PermissionManager.hasCapability(context, app?.id, "apps.install")) {
-            return error(403, "Missing capability: apps.install")
-        }
-        return try {
-            val packageUrl = JSONObject(body).getString("packageUrl")
-            val installed = WebAppInstaller.install(context, packageUrl)
-            json(200, JSONObject()
-                .put("installed", true)
-                .put("id", installed.id)
-                .put("name", installed.name)
-                .put("version", installed.version))
-        } catch (error: Exception) {
-            Log.w(TAG, "Web application installation rejected", error)
-            error(400, error.message ?: "Unable to install application")
-        }
-    }
+    private fun readAppIcon(context: Context, app: WebApp): ByteArray? = runCatching {
+        val iconPath = app.iconPath ?: return null
+        if (app.assetRoot != null) context.assets.open("${app.assetRoot}/$iconPath").use { it.readBytes() }
+        else File(app.fileRoot ?: return null, iconPath).readBytes()
+    }.getOrNull()
 
-    private fun uninstall(context: Context, app: WebApp?, body: String): Response {
-        if (!PermissionManager.hasCapability(context, app?.id, "apps.install")) {
-            return error(403, "Missing capability: apps.install")
-        }
-        return try {
-            val id = JSONObject(body).getString("id")
-            WebAppInstaller.uninstall(context, id)
-            json(200, JSONObject().put("uninstalled", true).put("id", id))
-        } catch (error: Exception) {
-            Log.w(TAG, "Web application removal rejected", error)
-            error(400, error.message ?: "Unable to remove application")
-        }
-    }
-
-    private fun static(context: Context, rawPath: String, app: WebApp, host: String): Response {
-        if (app.assetRoot != null) return staticAsset(context, app.assetRoot, rawPath, app, host)
-        val root = app.fileRoot ?: return error(404, "Not found")
-        return staticFile(root, rawPath, app)
-    }
-
-    private fun staticAsset(context: Context, root: String, rawPath: String, app: WebApp?, host: String): Response {
+    private fun staticAsset(context: Context, root: String, rawPath: String, app: WebApp?): Response {
         val relative = if (rawPath == "/") "index.html" else rawPath.removePrefix("/")
         if (relative.contains("..")) return error(400, "Invalid path")
         return try {
             val bytes = context.assets.open("$root/$relative").use { it.readBytes() }
-            val origins = WebAppRegistry.apps(context).map { WebAppRegistry.originFor(it, host, PORT) }
-            val csp = app?.let(CspBuilder::build) ?: CspBuilder.buildShell(origins)
+            val csp = app?.let(CspBuilder::build) ?: CspBuilder.buildPlatform()
             Response("200 OK", mime(relative), bytes, csp)
         } catch (_: Exception) {
             error(404, "Not found")
@@ -238,7 +240,16 @@ object PlatformServer {
         else -> "application/octet-stream"
     }
 
-    private data class Response(val status: String, val contentType: String, val body: ByteArray, val csp: String? = null)
+    data class Response(val status: String, val contentType: String, val body: ByteArray, val csp: String? = null) {
+        val statusCode: Int get() = status.substringBefore(' ').toInt()
+        val reason: String get() = status.substringAfter(' ')
+        val headers: Map<String, String> get() = buildMap {
+            put("Cache-Control", "no-store")
+            put("X-Content-Type-Options", "nosniff")
+            put("Referrer-Policy", "no-referrer")
+            csp?.let { put("Content-Security-Policy", it) }
+        }
+    }
 
     private const val TAG = "OmniAndHttp"
     private const val MAX_REQUEST_BODY = 16 * 1024

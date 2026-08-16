@@ -4,10 +4,10 @@
 
 OmniAnd is an Android proof of concept for a phone-hosted Web platform. The APK is simultaneously:
 
-- an Android HOME launcher;
+- a normal Android application with a shared Platform Home;
 - an HTTP application server;
 - a repository of packaged Web applications;
-- a capability provider for Android services such as installed apps and SMS.
+- a capability provider for Android services such as SMS.
 
 The Android WebView and desktop browsers are clients of the same HTTP platform. The phone remains the source of truth.
 
@@ -24,27 +24,32 @@ app/src/main/
 ├── AndroidManifest.xml
 ├── java/dev/omniand/launcher/
 │   ├── MainActivity.kt
+│   ├── WebAppActivity.kt
 │   ├── permissions/
 │   │   └── PermissionManager.kt
 │   ├── server/
 │   │   ├── CspBuilder.kt
+│   │   ├── LocalOriginRouter.kt
 │   │   └── PlatformServer.kt
 │   ├── services/
-│   │   ├── AndroidAppsService.kt
 │   │   └── SmsService.kt
 │   └── webapps/
+│       ├── WebAppInstaller.kt
 │       └── WebAppRegistry.kt
+│   └── wrappers/
+│       └── WrapperInstaller.kt
 └── assets/web/
     ├── shell/
     │   ├── index.html
     │   ├── app.js
     │   └── style.css
     └── apps/
-        ├── messages/
-        └── test/
+        └── store/
 ```
 
 The Web files live under Android assets so Gradle packages them into the APK. The HTTP server reads and serves those assets; the WebView must not load them with `file://` URLs.
+
+The `wrappers/template/` Gradle application module is the generic Android-integration template. It must not contain any Web package or app-specific native logic. The Platform embeds it, rewrites its binary manifest for an installed app, signs it with the Android-Keystore wrapper key, and hands the generated APK to Android's package installer.
 
 ## HTTP origins and virtual hosts
 
@@ -52,13 +57,14 @@ The POC uses separate hostnames on one port as separate Web origins:
 
 | Host | Application | Permissions |
 |---|---|---|
-| `localhost:8080` | Launcher shell | Launcher APIs |
-| `messages.localhost:8080` | Messages | `sms.read` |
-| `test.localhost:8080` | Permission test | None |
+| `phone.example.org` | Shared Platform Home | Platform management APIs |
+| `messages.phone.example.org` | Messages | `sms.read` |
+| `test.phone.example.org` | Permission test | None |
+| `store.phone.example.org` | Store manager | `apps.install` |
 
 Do not replace this with path-based isolation. Paths on one host and port share an origin and are not a security boundary.
 
-`PlatformServer` serves the launcher when the HTTP host has no registered app prefix. A registered app ID is prepended to the launcher host to form that app's origin. `PermissionManager` checks this identity before allowing protected APIs.
+`PlatformServer` treats a host whose leading label matches an installed app ID as that app origin; other hosts serve the Platform Home. A registered app ID is prepended to the current base host to form that app's origin. `PermissionManager` checks this identity before allowing protected APIs. Android WebViews keep canonical HTTPS origins while `LocalOriginRouter` serves them directly without DNS.
 
 ## Security expectations
 
@@ -73,10 +79,10 @@ Do not replace this with path-based isolation. Paths on one host and port share 
 
 ## Adding a Web app
 
-1. Create a directory under `app/src/main/assets/web/apps/<app-id>/`.
-2. Add a small `manifest.json`, `index.html`, JavaScript, and optional CSS.
-3. Register the app with a unique ID in `WebAppRegistry.kt`; the ID becomes its hostname label.
-4. Ensure the generated origin is included by the launcher CSP in `CspBuilder.kt`.
+1. Create the application only under `../omniAndStore/apps/<app-id>/`; never add catalog apps to Platform assets.
+2. Add a small `manifest.json`, `index.html`, JavaScript, optional CSS, and a PNG icon referenced by `"icon": "icon.png"`.
+3. Add the application to the Store catalog and regenerate its ZIP; installed packages are discovered from their manifests and the ID becomes the hostname label.
+4. Ensure its permissions are understood by `WebAppInstaller` and its generated CSP is restrictive.
 6. Grant only the capabilities the app requires.
 7. Ensure its frontend uses relative same-origin API URLs such as `fetch("/api/sms")`.
 
@@ -106,29 +112,23 @@ For Web changes, check JavaScript and manifests:
 
 ```sh
 node --check app/src/main/assets/web/shell/app.js
-node --check app/src/main/assets/web/apps/messages/app.js
-node --check app/src/main/assets/web/apps/test/app.js
+node --check ../omniAndStore/apps/messages/app.js
+node --check ../omniAndStore/apps/test/app.js
 ```
 
 For the full POC, verify all of the following on an Android device or AVD:
 
-1. OmniAnd is selectable as the HOME launcher.
-2. The launcher lists Android and Web applications.
-3. An Android application can be launched through its HTTP endpoint.
-4. Messages displays SMS after Android grants `READ_SMS`.
-5. Messages reports a useful error when permission is denied.
-6. The test app receives `403 Forbidden` from `/api/sms`.
-7. With port 8080 forwarded or reachable over the LAN, desktop Firefox can use the same launcher and Messages app through their distinct hostnames.
-
-Useful ADB forwarding for an emulator:
-
-```sh
-adb forward tcp:8080 tcp:8080
-```
+1. OmniAnd is launchable from the user's normal Android launcher and is not registered as HOME.
+2. The shared Platform Home lists only installed Web applications, not native Android applications.
+3. Messages displays SMS after Android grants `READ_SMS`.
+4. Messages reports a useful error when permission is denied.
+5. The test app receives `403 Forbidden` from `/api/sms`.
+6. With wildcard DNS and trusted TLS termination, desktop Firefox can use the same Platform Home and applications through their canonical hostnames.
+7. With Android networking disabled, canonical HTTPS origins still load through local WebView routing.
 
 ## Scope control
 
-This repository is intentionally a POC. Do not add an app store, SMS sending, calls, cloud synchronization, remote Internet access, JavaScript compatibility layers, WebRTC, WebSockets, or advanced package management unless explicitly requested.
+This repository is intentionally a POC. Preserve the existing Store/package installation path and generic on-demand wrapper generation, but do not add SMS sending, calls, cloud synchronization, remote Internet access, JavaScript compatibility layers, WebRTC, WebSockets, or advanced package management unless explicitly requested. Android wrapper APK integration is a separate optional layer; do not duplicate Web packages into wrappers.
 
 
 Check and update the ./MEMORY.MD file everytime.

@@ -1,12 +1,10 @@
 package dev.omniand.launcher
 
-import android.Manifest
 import android.app.Activity
-import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Bundle
-import android.webkit.WebResourceRequest
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import dev.omniand.launcher.BuildConfig
@@ -14,36 +12,36 @@ import dev.omniand.launcher.server.LocalOriginRouter
 import dev.omniand.launcher.server.PlatformServer
 import dev.omniand.launcher.webapps.WebAppRegistry
 
-class MainActivity : Activity() {
+class WebAppActivity : Activity() {
     private lateinit var webView: WebView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         PlatformServer.start(applicationContext)
-
+        val appId = intent.getStringExtra(EXTRA_APP_ID)
+        val app = WebAppRegistry.apps(this).firstOrNull { it.id == appId }
+        if (app == null) {
+            finish()
+            return
+        }
+        title = app.name
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.userAgentString = "${settings.userAgentString} OmniAndPlatform/1.0"
+            if (app.id == "store" && BuildConfig.STORE_URL.startsWith("http://")) {
+                // The locally routed Store shell has an HTTPS origin, while the
+                // development Vite catalog is intentionally served over HTTP.
+                settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            }
+            webChromeClient = WebChromeClient()
             webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                    if (!request.isForMainFrame) return false
-                    val app = request.url.host?.let { WebAppRegistry.byHost(applicationContext, it) } ?: return false
-                    startActivity(Intent(this@MainActivity, WebAppActivity::class.java).putExtra(WebAppActivity.EXTRA_APP_ID, app.id))
-                    return true
-                }
-
                 override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest) =
                     LocalOriginRouter.intercept(applicationContext, request)
             }
-            webChromeClient = WebChromeClient()
-            loadUrl("https://${BuildConfig.PLATFORM_HOST}/")
+            loadUrl(WebAppRegistry.originFor(app))
         }
         setContentView(webView)
-
-        if (checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.READ_SMS), SMS_PERMISSION_REQUEST)
-        }
     }
 
     @Deprecated("Deprecated in Java")
@@ -52,9 +50,9 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        webView.destroy()
+        if (::webView.isInitialized) webView.destroy()
         super.onDestroy()
     }
 
-    companion object { private const val SMS_PERMISSION_REQUEST = 10 }
+    companion object { const val EXTRA_APP_ID = "appId" }
 }
