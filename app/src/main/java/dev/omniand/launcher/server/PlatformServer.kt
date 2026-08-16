@@ -12,6 +12,8 @@ import dev.omniand.launcher.webapps.StoreCatalog
 import dev.omniand.launcher.wrappers.WrapperInstaller
 import dev.omniand.launcher.sms.SmsSetupManager
 import dev.omniand.launcher.sms.SmsNotifications
+import dev.omniand.launcher.sms.SmsEventBroadcaster
+import dev.omniand.launcher.sms.SmsReadEventPublisher
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -95,20 +97,23 @@ object PlatformServer {
     }
 
     private fun write(output: java.io.OutputStream, response: Response) {
-        val bytes = response.body
         val headers = buildString {
             append("HTTP/1.1 ${response.status}\r\n")
             append("Content-Type: ${response.contentType}\r\n")
-            append("Content-Length: ${bytes.size}\r\n")
-            append("Cache-Control: no-store\r\n")
-            append("X-Content-Type-Options: nosniff\r\n")
-            append("Referrer-Policy: no-referrer\r\n")
-            response.csp?.let { append("Content-Security-Policy: $it\r\n") }
+            response.contentLength?.let { append("Content-Length: $it\r\n") }
+            response.headers.forEach { (name, value) -> append("$name: $value\r\n") }
             append("Connection: close\r\n\r\n")
         }
         output.write(headers.toByteArray(Charsets.US_ASCII))
-        output.write(bytes)
-        output.flush()
+        response.openBody().use { input ->
+            val buffer = ByteArray(4096)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                output.write(buffer, 0, count)
+                output.flush()
+            }
+        }
     }
 
     fun localResponse(context: Context, method: String, path: String, host: String, headers: Map<String, String> = emptyMap()): Response =
@@ -132,6 +137,11 @@ object PlatformServer {
             return json(200, JSONObject().put("opened", true))
         }
         if (path == "/api/sms" && method == "GET") return sms(context, app)
+        if (path == "/api/sms/events" && method == "GET") {
+            if (!PermissionManager.hasCapability(context, app?.id, "sms.read")) return error(403, "Missing capability: sms.read")
+            return Response.stream("200 OK", "text/event-stream; charset=utf-8", { SmsEventBroadcaster.subscribe(closeAfterEvent = isLocalWebView) },
+                mapOf("Cache-Control" to "no-cache, no-transform", "X-Accel-Buffering" to "no"))
+        }
         if (path == "/api/sms/threads" && method == "GET") return sms(context, app) { it.threads() }
         if (path == "/api/sms/messages" && method == "POST") {
             return smsMutation(context, app, "sms.send") {
@@ -153,6 +163,7 @@ object PlatformServer {
             return smsMutation(context, app, "sms.modify") {
                 it.setThreadRead(threadRead.groupValues[1], requiredHeader(headers, "x-omniand-sms-read")).also {
                     if (requiredHeader(headers, "x-omniand-sms-read") == "true") SmsNotifications.cancelThread(context, threadRead.groupValues[1])
+                    SmsReadEventPublisher.publishThread(threadRead.groupValues[1])
                 }
             }
         }
@@ -161,6 +172,7 @@ object PlatformServer {
             return smsMutation(context, app, "sms.modify") {
                 it.setRead(messageRead.groupValues[1], requiredHeader(headers, "x-omniand-sms-read")).also { result ->
                     if (result.optBoolean("read")) SmsNotifications.cancelThread(context, result.getString("threadId"))
+                    SmsReadEventPublisher.publishMessage(messageRead.groupValues[1])
                 }
             }
         }
@@ -408,14 +420,24 @@ object PlatformServer {
         else -> "application/octet-stream"
     }
 
-    data class Response(val status: String, val contentType: String, val body: ByteArray, val csp: String? = null) {
+    class Response private constructor(val status: String, val contentType: String, private val fixedBody: ByteArray?,
+        val csp: String? = null, private val streamBody: (() -> java.io.InputStream)? = null,
+        private val extraHeaders: Map<String, String> = emptyMap()) {
+        constructor(status: String, contentType: String, body: ByteArray, csp: String? = null) : this(status, contentType, body, csp, null)
         val statusCode: Int get() = status.substringBefore(' ').toInt()
         val reason: String get() = status.substringAfter(' ')
+        val contentLength: Int? get() = fixedBody?.size
+        fun openBody(): java.io.InputStream = fixedBody?.inputStream() ?: streamBody!!.invoke()
         val headers: Map<String, String> get() = buildMap {
             put("Cache-Control", "no-store")
             put("X-Content-Type-Options", "nosniff")
             put("Referrer-Policy", "no-referrer")
             csp?.let { put("Content-Security-Policy", it) }
+            putAll(extraHeaders)
+        }
+        companion object {
+            fun stream(status: String, contentType: String, body: () -> java.io.InputStream, headers: Map<String, String>) =
+                Response(status, contentType, null, null, body, headers)
         }
     }
 

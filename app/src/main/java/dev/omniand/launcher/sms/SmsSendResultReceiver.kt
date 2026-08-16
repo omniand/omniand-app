@@ -44,6 +44,7 @@ object SmsSendTracker {
     fun failImmediately(context: Context, messageId: String) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(messageId).commit()
         updateProvider(context, messageId, SmsSendOutcome.FAILED, 0)
+        SmsSendEventPublisher.publishFinal(SmsSendOutcome.FAILED, messageId)
     }
 
     fun updateProvider(context: Context, messageId: String, outcome: SmsSendOutcome, errorCode: Int) {
@@ -78,6 +79,7 @@ class SmsSendResultReceiver : BroadcastReceiver() {
         if (partCount <= 0 || part !in 0 until partCount) return
         val outcome = SmsSendTracker.record(context, messageId, part, partCount, resultCode == Activity.RESULT_OK)
         SmsSendTracker.updateProvider(context, messageId, outcome, resultCode)
+        SmsSendEventPublisher.publishFinal(outcome, messageId)
     }
 
     companion object {

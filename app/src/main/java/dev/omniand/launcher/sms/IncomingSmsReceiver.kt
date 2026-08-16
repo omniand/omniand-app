@@ -52,6 +52,7 @@ class IncomingSmsReceiver : BroadcastReceiver() {
             val threadId = context.contentResolver.query(uri, arrayOf(Telephony.Sms.THREAD_ID), null, null, null)?.use {
                 if (it.moveToFirst()) it.getString(0) else null
             } ?: id
+            SmsIncomingEventPublisher.publishPersisted(id)
             SmsNotifications.publish(context, threadId, message.address.ifBlank { "New message" }, message.body, receivedAt)
         } catch (error: Exception) {
             DedupLedger.release(context, fingerprint)

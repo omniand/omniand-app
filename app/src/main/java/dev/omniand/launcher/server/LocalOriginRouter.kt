@@ -5,7 +5,6 @@ import android.net.Uri
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import dev.omniand.launcher.BuildConfig
-import java.io.ByteArrayInputStream
 
 /** Routes canonical HTTPS origins directly to the in-process server for Android WebViews. */
 object LocalOriginRouter {
@@ -30,7 +29,7 @@ object LocalOriginRouter {
             response.statusCode,
             response.reason,
             response.headers,
-            ByteArrayInputStream(response.body)
+            response.openBody()
         )
     }
 }
