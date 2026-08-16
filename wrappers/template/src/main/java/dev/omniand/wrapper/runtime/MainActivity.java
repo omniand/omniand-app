@@ -23,6 +23,7 @@ public final class MainActivity extends Activity {
             Intent platform = new Intent();
             platform.setClassName("dev.omniand.launcher", "dev.omniand.launcher.WebAppActivity");
             platform.putExtra("appId", appId);
+            platform.putExtra("androidIntegration", true);
             String route = getIntent().getStringExtra("route");
             String threadId = getIntent().getStringExtra("threadId");
             if (route != null && route.matches("^#/thread\\?id=[0-9]+$")) {
