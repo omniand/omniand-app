@@ -132,29 +132,8 @@ object PlatformServer {
         val uninstallPrefix = "/api/apps/uninstall/"
         if (path.startsWith(uninstallPrefix) && method == "POST") {
             if (!PermissionManager.hasCapability(context, app?.id, "apps.install")) return error(403, "Missing capability: apps.install")
-            return try {
-                val id = URLDecoder.decode(path.removePrefix(uninstallPrefix), "UTF-8")
-                val appToRemove = WebAppRegistry.apps(context).firstOrNull { it.id == id }
-                    ?: return error(404, "Web application not found")
-                if (WrapperInstaller.state(context, appToRemove).installed) {
-                    if (!isLocalWebView) {
-                        return json(409, JSONObject()
-                            .put("error", "This app has Android integration and must be uninstalled from the phone")
-                            .put("code", "android-integration-phone-required")
-                            .put("id", id))
-                    }
-                    WrapperInstaller.requestUninstall(context, appToRemove)
-                    return json(409, JSONObject()
-                        .put("error", "Uninstall the Android integration first, then retry")
-                        .put("code", "android-integration-installed")
-                        .put("id", id))
-                }
-                WebAppInstaller.uninstall(context, id)
-                json(200, JSONObject().put("uninstalled", true).put("id", id))
-            } catch (error: Exception) {
-                Log.w(TAG, "Web application removal rejected", error)
-                error(400, error.message ?: "Unable to remove application")
-            }
+            val id = URLDecoder.decode(path.removePrefix(uninstallPrefix), "UTF-8")
+            return removeWebApp(context, id, isLocalWebView)
         }
         if (WebAppRegistry.isPlatformHost(context, host)) {
             if (path == "/api/apps/web" && method == "GET") {
@@ -195,6 +174,11 @@ object PlatformServer {
                     error(400, error.message ?: "Unable to install Android integration")
                 }
             }
+            if (path.startsWith(integrationPrefix) && path.endsWith("/uninstall") && method == "POST") {
+                if (!isLocalWebView) return error(403, "Web applications can only be removed here from the phone")
+                val appId = URLDecoder.decode(path.removePrefix(integrationPrefix).removeSuffix("/uninstall"), "UTF-8")
+                return removeWebApp(context, appId, isLocalWebView = true)
+            }
         }
 
         if (app?.assetRoot != null) return staticAsset(context, app.assetRoot, path, app)
@@ -211,6 +195,31 @@ object PlatformServer {
             error(403, "Android SMS permission has not been granted")
         } catch (_: Exception) {
             error(500, "Unable to read SMS messages")
+        }
+    }
+
+    private fun removeWebApp(context: Context, id: String, isLocalWebView: Boolean): Response {
+        return try {
+            val appToRemove = WebAppRegistry.apps(context).firstOrNull { it.id == id }
+                ?: return error(404, "Web application not found")
+            if (WrapperInstaller.state(context, appToRemove).installed) {
+                if (!isLocalWebView) {
+                    return json(409, JSONObject()
+                        .put("error", "This app has Android integration and must be uninstalled from the phone")
+                        .put("code", "android-integration-phone-required")
+                        .put("id", id))
+                }
+                WrapperInstaller.requestUninstall(context, appToRemove)
+                return json(409, JSONObject()
+                    .put("error", "Uninstall the Android integration first, then retry")
+                    .put("code", "android-integration-installed")
+                    .put("id", id))
+            }
+            WebAppInstaller.uninstall(context, id)
+            json(200, JSONObject().put("uninstalled", true).put("id", id))
+        } catch (error: Exception) {
+            Log.w(TAG, "Web application removal rejected", error)
+            error(400, error.message ?: "Unable to remove application")
         }
     }
 

@@ -18,26 +18,39 @@
     </header>
 
     <section aria-labelledby="apps-title">
-      <div class="section-heading">
-        <h2 id="apps-title">Installed apps</h2>
-        <button id="refresh" class="secondary" type="button">Refresh</button>
-      </div>
+      <h2 id="apps-title">Installed apps</h2>
       <div id="web-apps" class="apps" aria-live="polite"><p class="state">Loading…</p></div>
     </section>
   </main>
 
   <template id="app-template">
-    <article class="app-card">
-      <div class="app-identity">
-        <span class="app-mark" aria-hidden="true"></span>
-        <div><h3 class="app-name"></h3><p class="app-origin"></p></div>
-      </div>
-      <div class="actions">
-        <button class="open primary" type="button">Open</button>
-        <button class="integration secondary" type="button" hidden></button>
-      </div>
-    </article>
+    <button class="app-tile" type="button">
+      <span class="app-mark" aria-hidden="true"></span>
+      <span class="app-name"></span>
+    </button>
   </template>
+
+  <div id="menu-backdrop" class="menu-backdrop" hidden>
+    <section class="app-menu" role="dialog" aria-modal="true" aria-labelledby="menu-title">
+      <div class="menu-app"><span id="menu-mark" class="app-mark" aria-hidden="true"></span><h2 id="menu-title"></h2></div>
+      <div id="menu-actions" class="menu-actions">
+        <button id="menu-integrate" type="button">Add to Android</button>
+        <button id="menu-uninstall" class="danger" type="button">Uninstall</button>
+        <button id="menu-cancel" type="button">Cancel</button>
+      </div>
+      <div id="uninstall-confirm" class="menu-panel" hidden>
+        <p>Uninstall this Web app and delete its local files?</p>
+        <div class="menu-buttons">
+          <button id="uninstall-back" type="button">Cancel</button>
+          <button id="uninstall-confirm-button" class="danger filled" type="button">Uninstall</button>
+        </div>
+      </div>
+      <div id="menu-message" class="menu-panel" hidden>
+        <p id="menu-message-text"></p>
+        <button id="menu-message-close" class="menu-wide-button" type="button">OK</button>
+      </div>
+    </section>
+  </div>
   <script src="/app.js" defer></script>
 </body>
 </html>
