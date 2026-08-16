@@ -63,6 +63,12 @@ object WrapperInstaller {
         return "installer-opened"
     }
 
+    fun requestUninstall(context: Context, app: WebApp) {
+        check(state(context, app).installed) { "Android integration is not installed" }
+        context.startActivity(Intent(Intent.ACTION_DELETE, Uri.parse("package:${packageName(app.id)}"))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
     private fun generateUnsigned(context: Context, app: WebApp, output: File) {
         context.assets.open("wrappers/template.apk").use { template ->
             ZipInputStream(template).use { input ->

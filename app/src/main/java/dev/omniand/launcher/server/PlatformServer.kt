@@ -134,6 +134,21 @@ object PlatformServer {
             if (!PermissionManager.hasCapability(context, app?.id, "apps.install")) return error(403, "Missing capability: apps.install")
             return try {
                 val id = URLDecoder.decode(path.removePrefix(uninstallPrefix), "UTF-8")
+                val appToRemove = WebAppRegistry.apps(context).firstOrNull { it.id == id }
+                    ?: return error(404, "Web application not found")
+                if (WrapperInstaller.state(context, appToRemove).installed) {
+                    if (!isLocalWebView) {
+                        return json(409, JSONObject()
+                            .put("error", "This app has Android integration and must be uninstalled from the phone")
+                            .put("code", "android-integration-phone-required")
+                            .put("id", id))
+                    }
+                    WrapperInstaller.requestUninstall(context, appToRemove)
+                    return json(409, JSONObject()
+                        .put("error", "Uninstall the Android integration first, then retry")
+                        .put("code", "android-integration-installed")
+                        .put("id", id))
+                }
                 WebAppInstaller.uninstall(context, id)
                 json(200, JSONObject().put("uninstalled", true).put("id", id))
             } catch (error: Exception) {
@@ -231,7 +246,7 @@ object PlatformServer {
 
     private fun json(code: Int, value: Any) = Response(status(code), "application/json; charset=utf-8", value.toString().toByteArray())
     private fun error(code: Int, message: String) = json(code, JSONObject().put("error", message))
-    private fun status(code: Int) = when (code) { 200 -> "200 OK"; 400 -> "400 Bad Request"; 403 -> "403 Forbidden"; 404 -> "404 Not Found"; 413 -> "413 Payload Too Large"; else -> "500 Internal Server Error" }
+    private fun status(code: Int) = when (code) { 200 -> "200 OK"; 400 -> "400 Bad Request"; 403 -> "403 Forbidden"; 404 -> "404 Not Found"; 409 -> "409 Conflict"; 413 -> "413 Payload Too Large"; else -> "500 Internal Server Error" }
     private fun mime(path: String) = when {
         path.endsWith(".html") -> "text/html; charset=utf-8"
         path.endsWith(".js") -> "text/javascript; charset=utf-8"

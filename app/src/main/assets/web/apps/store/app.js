@@ -30,6 +30,20 @@ async function start() {
         } else if (event.data?.type === 'omniand:uninstall') {
           const uninstallResponse = await fetch(`/api/apps/uninstall/${encodeURIComponent(event.data.id)}`, {method: 'POST'});
           const result = await uninstallResponse.json();
+          if (uninstallResponse.status === 409 && result.code === 'android-integration-phone-required') {
+            frame.contentWindow.postMessage({
+              type: 'omniand:phone-uninstall-required', requestId, id: result.id,
+              name: event.data.name, error: result.error
+            }, storeOrigin);
+            return;
+          }
+          if (uninstallResponse.status === 409 && result.code === 'android-integration-installed') {
+            frame.contentWindow.postMessage({
+              type: 'omniand:android-uninstall-required', requestId, id: result.id,
+              name: event.data.name, error: result.error
+            }, storeOrigin);
+            return;
+          }
           if (!uninstallResponse.ok) throw new Error(result.error || 'Désinstallation impossible.');
           installedApps.delete(result.id);
           frame.contentWindow.postMessage({type: 'omniand:uninstalled', requestId, id: result.id}, storeOrigin);
