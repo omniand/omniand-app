@@ -2,6 +2,7 @@ package dev.omniand.launcher.wrappers
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
@@ -17,6 +18,9 @@ import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.PrivateKey
 import java.security.cert.X509Certificate
+import java.security.MessageDigest
+import android.os.Build
+import org.json.JSONObject
 import java.util.Calendar
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
@@ -27,9 +31,27 @@ object WrapperInstaller {
     private const val TEMPLATE_PACKAGE = "dev.omniand.generated.placeholderxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
     private const val TEMPLATE_LABEL = "OMNIAND_WRAPPER_LABEL_PLACEHOLDER_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
     private const val TEMPLATE_APP_ID = "OMNIAND_APP_ID_PLACEHOLDER_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+    private const val TEMPLATE_PLATFORM_CERT = "OMNIAND_PLATFORM_CERT_PLACEHOLDER_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
     private const val KEY_ALIAS = "omniand-generated-wrappers"
 
     data class State(val supported: Boolean, val installed: Boolean)
+
+    fun relayState(context: Context, appId: String): JSONObject {
+        val packageName = packageName(appId)
+        val info = runCatching { context.packageManager.getApplicationInfo(packageName, PackageManager.GET_META_DATA) }.getOrNull()
+        val version = info?.metaData?.getInt("dev.omniand.RELAY_VERSION", 0) ?: 0
+        return JSONObject().put("installed", info != null).put("available", info != null && version == 1)
+            .put("protocolVersion", version).put("updateAvailable", info != null && version != 1)
+    }
+
+    fun isTrustedWrapper(context: Context, appId: String): Boolean = runCatching {
+        val flags = if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES else @Suppress("DEPRECATION") PackageManager.GET_SIGNATURES
+        val info = context.packageManager.getPackageInfo(packageName(appId), flags)
+        val actual = if (Build.VERSION.SDK_INT >= 28) info.signingInfo?.apkContentsSigners?.firstOrNull()?.toByteArray()
+            else @Suppress("DEPRECATION") info.signatures?.firstOrNull()?.toByteArray()
+        val expected = (wrapperKeyStore().getCertificate(KEY_ALIAS) as X509Certificate).encoded
+        actual != null && MessageDigest.isEqual(MessageDigest.getInstance("SHA-256").digest(actual), MessageDigest.getInstance("SHA-256").digest(expected))
+    }.getOrDefault(false)
 
     fun state(context: Context, app: WebApp): State {
         val installed = runCatching { context.packageManager.getPackageInfo(packageName(app.id), 0) }.isSuccess
@@ -78,7 +100,7 @@ object WrapperInstaller {
                         if (entry.name.startsWith("META-INF/")) continue
                         val content = input.readBytes()
                         val generated = if (entry.name == "AndroidManifest.xml") {
-                            patchManifest(content, app)
+                            patchManifest(context, content, app)
                         } else if (entry.name == "res/drawable/icon.png") {
                             readIcon(context, app) ?: content
                         } else content
@@ -99,10 +121,20 @@ object WrapperInstaller {
         }
     }
 
-    private fun patchManifest(manifest: ByteArray, app: WebApp): ByteArray = manifest.copyOf().also { output ->
+    private fun patchManifest(context: Context, manifest: ByteArray, app: WebApp): ByteArray = manifest.copyOf().also { output ->
         replaceBinaryXmlString(output, TEMPLATE_PACKAGE, packageName(app.id))
         replaceBinaryXmlString(output, TEMPLATE_LABEL, app.name.take(80))
         replaceBinaryXmlString(output, TEMPLATE_APP_ID, app.id)
+        replaceBinaryXmlString(output, TEMPLATE_PLATFORM_CERT, platformCertificateFingerprint(context))
+    }
+
+    private fun platformCertificateFingerprint(context: Context): String {
+        val flags = if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES
+            else @Suppress("DEPRECATION") PackageManager.GET_SIGNATURES
+        val info = context.packageManager.getPackageInfo(context.packageName, flags)
+        val certificate = if (Build.VERSION.SDK_INT >= 28) info.signingInfo!!.apkContentsSigners.first().toByteArray()
+            else @Suppress("DEPRECATION") info.signatures!!.first().toByteArray()
+        return MessageDigest.getInstance("SHA-256").digest(certificate).joinToString("") { "%02x".format(it) }
     }
 
     private fun readIcon(context: Context, app: WebApp): ByteArray? = runCatching {

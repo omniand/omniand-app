@@ -1,9 +1,7 @@
 package dev.omniand.launcher
 
-import android.Manifest
 import android.app.Activity
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Bundle
 import android.webkit.WebResourceRequest
 import android.webkit.WebChromeClient
@@ -13,6 +11,7 @@ import dev.omniand.launcher.BuildConfig
 import dev.omniand.launcher.server.LocalOriginRouter
 import dev.omniand.launcher.server.PlatformServer
 import dev.omniand.launcher.webapps.WebAppRegistry
+import dev.omniand.launcher.sms.SmsSetupManager
 
 class MainActivity : Activity() {
     private lateinit var webView: WebView
@@ -41,11 +40,7 @@ class MainActivity : Activity() {
         }
         setContentView(webView)
 
-        val missingSmsPermissions = arrayOf(Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS)
-            .filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-        if (missingSmsPermissions.isNotEmpty()) {
-            requestPermissions(missingSmsPermissions.toTypedArray(), SMS_PERMISSION_REQUEST)
-        }
+        SmsSetupManager.openPendingSetup(this)
     }
 
     @Deprecated("Deprecated in Java")
@@ -67,5 +62,4 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
-    companion object { private const val SMS_PERMISSION_REQUEST = 10 }
 }

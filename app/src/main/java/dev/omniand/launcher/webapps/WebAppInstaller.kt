@@ -19,7 +19,7 @@ object WebAppInstaller {
     private val validId = Regex("[a-z][a-z0-9-]{0,31}")
     private val knownCapabilities = setOf("sms.read", "sms.send", "sms.modify")
 
-    data class Installed(val id: String, val name: String, val version: String)
+    data class Installed(val id: String, val name: String, val version: String, val permissions: Set<String>)
 
     fun uninstall(context: Context, id: String) {
         check(validId.matches(id)) { "Invalid application id" }
@@ -56,9 +56,12 @@ object WebAppInstaller {
                 val icon = File(packageRoot, iconPath)
                 check(icon.isFile && icon.length() <= 512 * 1024) { "Application icon is missing or too large" }
             }
-            val permissions = manifest.optJSONArray("permissions")
-            if (permissions != null) for (index in 0 until permissions.length()) {
-                check(permissions.getString(index) in knownCapabilities) { "Unknown capability" }
+            val permissionsJson = manifest.optJSONArray("permissions")
+            val declaredPermissions = mutableSetOf<String>()
+            if (permissionsJson != null) for (index in 0 until permissionsJson.length()) {
+                val permission = permissionsJson.getString(index)
+                check(permission in knownCapabilities) { "Unknown capability" }
+                declaredPermissions += permission
             }
 
             val root = WebAppRegistry.installedRoot(context)
@@ -74,7 +77,7 @@ object WebAppInstaller {
                 if (!target.exists() && backup.exists()) backup.renameTo(target)
                 throw error
             }
-            return Installed(id, name, version)
+            return Installed(id, name, version, declaredPermissions)
         } finally {
             staging.deleteRecursively()
         }

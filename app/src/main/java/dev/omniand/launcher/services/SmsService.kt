@@ -8,6 +8,7 @@ import android.telephony.SmsManager
 import android.provider.Telephony
 import org.json.JSONArray
 import org.json.JSONObject
+import dev.omniand.launcher.sms.SmsSetupManager
 
 data class SmsRecord(
     val id: String,
@@ -54,6 +55,7 @@ object SmsMapper {
 
 class SmsService(private val context: Context) {
     class PermissionMissing : Exception()
+    class RoleRequired : Exception()
     class InvalidId : Exception()
     class InvalidInput : Exception()
     class NotFound : Exception()
@@ -94,8 +96,10 @@ class SmsService(private val context: Context) {
     }
 
     fun setRead(rawMessageId: String, rawRead: String): JSONObject {
+        requireRole()
         requirePermission(WRITE_SMS_PERMISSION)
         val messageId = SmsMapper.requireId(rawMessageId)
+        val threadId = threadForMessage(messageId)
         val read = parseRead(rawRead)
         val changed = context.contentResolver.update(
             Telephony.Sms.CONTENT_URI,
@@ -103,20 +107,23 @@ class SmsService(private val context: Context) {
             "${Telephony.Sms._ID} = ?", arrayOf(messageId)
         )
         if (changed == 0) throw NotFound()
-        return JSONObject().put("id", messageId).put("read", read)
+        return JSONObject().put("id", messageId).put("threadId", threadId).put("read", read)
     }
 
     fun deleteMessage(rawMessageId: String): JSONObject {
+        requireRole()
         requirePermission(WRITE_SMS_PERMISSION)
         val messageId = SmsMapper.requireId(rawMessageId)
+        val threadId = threadForMessage(messageId)
         val changed = context.contentResolver.delete(
             Telephony.Sms.CONTENT_URI, "${Telephony.Sms._ID} = ?", arrayOf(messageId)
         )
         if (changed == 0) throw NotFound()
-        return JSONObject().put("deleted", true).put("id", messageId)
+        return JSONObject().put("deleted", true).put("id", messageId).put("threadId", threadId)
     }
 
     fun setThreadRead(rawThreadId: String, rawRead: String): JSONObject {
+        requireRole()
         requirePermission(WRITE_SMS_PERMISSION)
         val threadId = SmsMapper.requireId(rawThreadId)
         val read = parseRead(rawRead)
@@ -130,6 +137,7 @@ class SmsService(private val context: Context) {
     }
 
     fun deleteThread(rawThreadId: String): JSONObject {
+        requireRole()
         requirePermission(WRITE_SMS_PERMISSION)
         val threadId = SmsMapper.requireId(rawThreadId)
         val changed = context.contentResolver.delete(
@@ -175,8 +183,17 @@ class SmsService(private val context: Context) {
         return result
     }
 
+    private fun threadForMessage(messageId: String): String = context.contentResolver.query(
+        Telephony.Sms.CONTENT_URI, arrayOf(Telephony.Sms.THREAD_ID),
+        "${Telephony.Sms._ID} = ?", arrayOf(messageId), null
+    )?.use { if (it.moveToFirst()) it.getString(0) else null } ?: throw NotFound()
+
     private fun requirePermission(permission: String) {
         if (context.checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) throw PermissionMissing()
+    }
+
+    private fun requireRole() {
+        if (!SmsSetupManager.isRoleHeld(context)) throw RoleRequired()
     }
 
     private fun parseRead(rawRead: String): Boolean = when (rawRead) {

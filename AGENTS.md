@@ -2,7 +2,7 @@
 
 ## Project purpose
 
-OmniAnd is an Android proof of concept for a phone-hosted Web platform. The APK is simultaneously:
+OmniAnd is an Android a phone-hosted Web platform. The APK is simultaneously:
 
 - a normal Android application with a shared Platform Home;
 - an HTTP application server;
@@ -53,7 +53,7 @@ The `wrappers/template/` Gradle application module is the generic Android-integr
 
 ## HTTP origins and virtual hosts
 
-The POC uses separate hostnames on one port as separate Web origins:
+The pjoject uses separate hostnames on one port as separate Web origins:
 
 | Host | Application | Permissions |
 |---|---|---|
@@ -74,7 +74,7 @@ Do not replace this with path-based isolation. Paths on one host and port share 
 - Protected APIs must deny access by default.
 - The unprivileged test app must continue receiving `403 Forbidden` from `/api/sms`.
 - Do not add broad CORS access when a same-origin endpoint can be used.
-- The current cleartext, unauthenticated LAN server is POC-only. Do not describe it as safe for untrusted networks.
+- The current cleartext, unauthenticated LAN server is dev-only. Do not describe it as safe for untrusted networks.
 - Preserve the separation between Android permission checks and Web-app capability checks; both are required.
 
 ## Adding a Web app
@@ -116,7 +116,7 @@ node --check ../omniAndStore/apps/messages/app.js
 node --check ../omniAndStore/apps/test/app.js
 ```
 
-For the full POC, verify all of the following on an Android device or AVD:
+For the project, verify all of the following on an Android device or AVD:
 
 1. OmniAnd is launchable from the user's normal Android launcher and is not registered as HOME.
 2. The shared Platform Home lists only installed Web applications, not native Android applications.
@@ -128,7 +128,7 @@ For the full POC, verify all of the following on an Android device or AVD:
 
 ## Scope control
 
-This repository is intentionally a POC. Preserve the existing Store/package installation path and generic on-demand wrapper generation, but do not add SMS sending, calls, cloud synchronization, remote Internet access, JavaScript compatibility layers, WebRTC, WebSockets, or advanced package management unless explicitly requested. Android wrapper APK integration is a separate optional layer; do not duplicate Web packages into wrappers.
+Preserve the existing Store/package installation path and generic on-demand wrapper generation, but do not add SMS sending, calls, cloud synchronization, remote Internet access, JavaScript compatibility layers, WebRTC, WebSockets, or advanced package management unless explicitly requested. Android wrapper APK integration is a separate optional layer; do not duplicate Web packages into wrappers.
 
 
-Check and update the ./MEMORY.MD file everytime.
+Check and update the ./MEMORY.md file everytime.

@@ -9,6 +9,8 @@ import dev.omniand.launcher.webapps.WebApp
 import dev.omniand.launcher.webapps.WebAppInstaller
 import dev.omniand.launcher.webapps.WebAppRegistry
 import dev.omniand.launcher.wrappers.WrapperInstaller
+import dev.omniand.launcher.sms.SmsSetupManager
+import dev.omniand.launcher.sms.SmsNotifications
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -114,6 +116,20 @@ object PlatformServer {
 
     private fun route(context: Context, method: String, path: String, host: String, isLocalWebView: Boolean, headers: Map<String, String>): Response {
         val app = WebAppRegistry.byHost(context, host)
+        if (path == "/api/sms/setup" && method == "GET") {
+            if (!PermissionManager.hasCapability(context, app?.id, "sms.read") &&
+                !PermissionManager.hasCapability(context, app?.id, "sms.send") &&
+                !PermissionManager.hasCapability(context, app?.id, "sms.modify")) return codedError(403, "missing-capability", "Missing SMS capability")
+            return json(200, SmsSetupManager.state(context))
+        }
+        if (path == "/api/sms/setup/request" && method == "POST") {
+            if (!PermissionManager.hasCapability(context, app?.id, "sms.read") &&
+                !PermissionManager.hasCapability(context, app?.id, "sms.send") &&
+                !PermissionManager.hasCapability(context, app?.id, "sms.modify")) return codedError(403, "missing-capability", "Missing SMS capability")
+            if (!isLocalWebView) return codedError(403, "phone-local-required", "SMS setup can only be opened on the phone")
+            SmsSetupManager.request(context, app?.permissions.orEmpty())
+            return json(200, JSONObject().put("opened", true))
+        }
         if (path == "/api/sms" && method == "GET") return sms(context, app)
         if (path == "/api/sms/threads" && method == "GET") return sms(context, app) { it.threads() }
         if (path == "/api/sms/messages" && method == "POST") {
@@ -127,18 +143,24 @@ object PlatformServer {
         }
         val thread = Regex("^/api/sms/threads/([^/]+)$").matchEntire(path)
         if (thread != null && method == "DELETE") {
-            return smsMutation(context, app, "sms.modify") { it.deleteThread(thread.groupValues[1]) }
+            return smsMutation(context, app, "sms.modify") {
+                it.deleteThread(thread.groupValues[1]).also { SmsNotifications.cancelThread(context, thread.groupValues[1]) }
+            }
         }
         val threadRead = Regex("^/api/sms/threads/([^/]+)/read$").matchEntire(path)
         if (threadRead != null && method == "POST") {
             return smsMutation(context, app, "sms.modify") {
-                it.setThreadRead(threadRead.groupValues[1], requiredHeader(headers, "x-omniand-sms-read"))
+                it.setThreadRead(threadRead.groupValues[1], requiredHeader(headers, "x-omniand-sms-read")).also {
+                    if (requiredHeader(headers, "x-omniand-sms-read") == "true") SmsNotifications.cancelThread(context, threadRead.groupValues[1])
+                }
             }
         }
         val messageRead = Regex("^/api/sms/messages/([^/]+)/read$").matchEntire(path)
         if (messageRead != null && method == "POST") {
             return smsMutation(context, app, "sms.modify") {
-                it.setRead(messageRead.groupValues[1], requiredHeader(headers, "x-omniand-sms-read"))
+                it.setRead(messageRead.groupValues[1], requiredHeader(headers, "x-omniand-sms-read")).also { result ->
+                    if (result.optBoolean("read")) SmsNotifications.cancelThread(context, result.getString("threadId"))
+                }
             }
         }
         val singleMessage = Regex("^/api/sms/messages/([^/]+)$").matchEntire(path)
@@ -146,7 +168,9 @@ object PlatformServer {
             return sms(context, app) { it.message(singleMessage.groupValues[1]) }
         }
         if (singleMessage != null && method == "DELETE") {
-            return smsMutation(context, app, "sms.modify") { it.deleteMessage(singleMessage.groupValues[1]) }
+            return smsMutation(context, app, "sms.modify") {
+                it.deleteMessage(singleMessage.groupValues[1]).also { result -> SmsNotifications.cancelThread(context, result.getString("threadId")) }
+            }
         }
         if (path == "/api/store/config" && method == "GET" && app?.id == "store") {
             return json(200, JSONObject()
@@ -160,6 +184,10 @@ object PlatformServer {
             if (!PermissionManager.hasCapability(context, app?.id, "apps.install")) return error(403, "Missing capability: apps.install")
             return try {
                 val installed = WebAppInstaller.install(context, URLDecoder.decode(path.removePrefix(installPrefix), "UTF-8"))
+                if (installed.permissions.any { it.startsWith("sms.") }) {
+                    SmsSetupManager.recordPending(context, installed.permissions)
+                    if (isLocalWebView) SmsSetupManager.request(context, installed.permissions)
+                }
                 json(200, JSONObject().put("installed", true).put("id", installed.id).put("name", installed.name).put("version", installed.version))
             } catch (error: Exception) {
                 Log.w(TAG, "Web application installation rejected", error)
@@ -233,7 +261,7 @@ object PlatformServer {
         return try {
             json(200, operation(SmsService(context)))
         } catch (_: SmsService.PermissionMissing) {
-            error(403, "Android SMS permission has not been granted")
+            codedError(403, "android-permission-required", "Android SMS permission has not been granted")
         } catch (_: SmsService.InvalidId) {
             error(400, "Invalid SMS identifier")
         } catch (_: SmsService.NotFound) {
@@ -248,7 +276,9 @@ object PlatformServer {
         return try {
             json(200, operation(SmsService(context)))
         } catch (_: SmsService.PermissionMissing) {
-            error(403, "Required Android SMS permission or default SMS role is missing")
+            codedError(403, "android-permission-required", "Required Android SMS permission is missing")
+        } catch (_: SmsService.RoleRequired) {
+            codedError(403, "sms-role-required", "OmniAnd must be the default SMS application for this action")
         } catch (_: SmsService.InvalidInput) {
             error(400, "Invalid SMS request")
         } catch (_: SmsService.InvalidId) {
@@ -257,7 +287,7 @@ object PlatformServer {
             error(404, "SMS resource not found")
         } catch (error: SecurityException) {
             Log.w(TAG, "SMS mutation denied by Android", error)
-            error(403, "Android requires OmniAnd to be the default SMS application for this action")
+            codedError(403, "sms-role-required", "Android requires OmniAnd to be the default SMS application for this action")
         } catch (error: Exception) {
             Log.e(TAG, "SMS mutation failed", error)
             error(500, "Unable to change SMS messages")
@@ -324,6 +354,8 @@ object PlatformServer {
 
     private fun json(code: Int, value: Any) = Response(status(code), "application/json; charset=utf-8", value.toString().toByteArray())
     private fun error(code: Int, message: String) = json(code, JSONObject().put("error", message))
+    private fun codedError(code: Int, stableCode: String, message: String) =
+        json(code, JSONObject().put("error", message).put("code", stableCode))
     private fun status(code: Int) = when (code) { 200 -> "200 OK"; 400 -> "400 Bad Request"; 403 -> "403 Forbidden"; 404 -> "404 Not Found"; 409 -> "409 Conflict"; 413 -> "413 Payload Too Large"; else -> "500 Internal Server Error" }
     private fun mime(path: String) = when {
         path.endsWith(".html") -> "text/html; charset=utf-8"

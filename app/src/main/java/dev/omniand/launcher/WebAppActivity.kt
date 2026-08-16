@@ -11,6 +11,7 @@ import dev.omniand.launcher.BuildConfig
 import dev.omniand.launcher.server.LocalOriginRouter
 import dev.omniand.launcher.server.PlatformServer
 import dev.omniand.launcher.webapps.WebAppRegistry
+import dev.omniand.launcher.sms.SmsNotifications
 
 class WebAppActivity : Activity() {
     private lateinit var webView: WebView
@@ -39,9 +40,11 @@ class WebAppActivity : Activity() {
                 override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest) =
                     LocalOriginRouter.intercept(applicationContext, request)
             }
-            loadUrl(WebAppRegistry.originFor(app))
+            val route = intent.getStringExtra(EXTRA_ROUTE)?.takeIf(::validRoute).orEmpty()
+            loadUrl(WebAppRegistry.originFor(app) + route)
         }
         setContentView(webView)
+        if (app.id == "messages") intent.getStringExtra(EXTRA_THREAD_ID)?.let { SmsNotifications.cancelThread(this, it) }
     }
 
     @Deprecated("Deprecated in Java")
@@ -54,5 +57,10 @@ class WebAppActivity : Activity() {
         super.onDestroy()
     }
 
-    companion object { const val EXTRA_APP_ID = "appId" }
+    companion object {
+        const val EXTRA_APP_ID = "appId"
+        const val EXTRA_ROUTE = "route"
+        const val EXTRA_THREAD_ID = "threadId"
+        fun validRoute(route: String): Boolean = route.matches(Regex("^#/(thread\\?id=[0-9]+|compose\\?to=[^#&]{0,100}(&body=[^#]{0,2000})?)$"))
+    }
 }
