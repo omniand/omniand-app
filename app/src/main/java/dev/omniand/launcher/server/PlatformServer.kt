@@ -8,6 +8,7 @@ import dev.omniand.launcher.services.SmsService
 import dev.omniand.launcher.webapps.WebApp
 import dev.omniand.launcher.webapps.WebAppInstaller
 import dev.omniand.launcher.webapps.WebAppRegistry
+import dev.omniand.launcher.webapps.StoreCatalog
 import dev.omniand.launcher.wrappers.WrapperInstaller
 import dev.omniand.launcher.sms.SmsSetupManager
 import dev.omniand.launcher.sms.SmsNotifications
@@ -207,6 +208,8 @@ object PlatformServer {
                         val integration = WrapperInstaller.state(context, item)
                         put(JSONObject()
                             .put("id", item.id).put("name", item.name)
+                            .put("version", item.version)
+                            .put("updatable", item.fileRoot != null)
                             .put("origin", if (!isLocalWebView) {
                                 WebAppRegistry.developmentOriginFor(item, host, PORT)
                             } else {
@@ -222,6 +225,41 @@ object PlatformServer {
                 return json(200, apps)
             }
             val integrationPrefix = "/api/apps/web/"
+            if (path.startsWith(integrationPrefix) && path.endsWith("/update") && method in setOf("GET", "POST")) {
+                if (!isLocalWebView) return codedError(403, "phone-local-required", "Web applications can only be updated from the phone")
+                val appId = URLDecoder.decode(path.removePrefix(integrationPrefix).removeSuffix("/update"), "UTF-8")
+                val installedApp = WebAppRegistry.apps(context).firstOrNull { it.id == appId && it.fileRoot != null }
+                    ?: return error(404, "Updatable Web application not found")
+                return try {
+                    val update = StoreCatalog.check(installedApp)
+                    if (method == "GET") {
+                        json(200, JSONObject()
+                            .put("currentVersion", update.currentVersion)
+                            .put("available", update.available)
+                            .put("availableVersion", update.availableVersion ?: JSONObject.NULL)
+                            .put("addedCapabilities", JSONArray(update.addedCapabilities.sorted())))
+                    } else {
+                        val expectedVersion = headers["x-omniand-update-version"]
+                            ?: return codedError(400, "expected-version-required", "X-OmniAnd-Update-Version is required")
+                        if (!update.available || update.availableVersion != expectedVersion || update.catalogApp == null) {
+                            return codedError(409, "stale-update", "The selected update is no longer available")
+                        }
+                        val selected = update.catalogApp
+                        val result = WebAppInstaller.install(context, selected.packageUrl,
+                            WebAppInstaller.Expected(selected.id, selected.version, selected.permissions))
+                        val addedSms = update.addedCapabilities.filterTo(mutableSetOf()) { it.startsWith("sms.") }
+                        if (addedSms.isNotEmpty()) {
+                            SmsSetupManager.recordPending(context, result.permissions)
+                            SmsSetupManager.request(context, result.permissions)
+                        }
+                        json(200, JSONObject().put("updated", true).put("id", result.id)
+                            .put("previousVersion", update.currentVersion).put("newVersion", result.version))
+                    }
+                } catch (error: Exception) {
+                    Log.w(TAG, "Web application update failed", error)
+                    codedError(400, "update-failed", error.message ?: "Unable to update application")
+                }
+            }
             if (path.startsWith(integrationPrefix) && path.endsWith("/icon") && method == "GET") {
                 val appId = URLDecoder.decode(path.removePrefix(integrationPrefix).removeSuffix("/icon"), "UTF-8")
                 val icon = WebAppRegistry.apps(context).firstOrNull { it.id == appId }?.let { readAppIcon(context, it) }

@@ -8,6 +8,7 @@ import java.io.File
 data class WebApp(
     val id: String,
     val name: String,
+    val version: String,
     val permissions: Set<String>,
     val assetRoot: String? = null,
     val fileRoot: File? = null,
@@ -16,7 +17,7 @@ data class WebApp(
 
 object WebAppRegistry {
     private val builtInApps = listOf(
-        WebApp("store", "Store", setOf("apps.install"), "web/apps/store", iconPath = "icon.png")
+        WebApp("store", "Store", BuildConfig.VERSION_NAME, setOf("apps.install"), "web/apps/store", iconPath = "icon.png")
     )
 
     fun apps(context: Context): List<WebApp> {
@@ -48,7 +49,7 @@ object WebAppRegistry {
         if (id != directory.name || builtInApps.any { it.id == id }) return null
         val permissions = manifest.optJSONArray("permissions")
         val iconPath = manifest.optString("icon").takeIf { it.isNotBlank() && !it.startsWith('/') && !it.contains("..") }
-        WebApp(id, manifest.getString("name"), buildSet {
+        WebApp(id, manifest.getString("name"), manifest.getString("version"), buildSet {
             if (permissions != null) for (index in 0 until permissions.length()) add(permissions.getString(index))
         }, fileRoot = directory, iconPath = iconPath?.takeIf { File(directory, it).isFile })
     }.getOrNull()

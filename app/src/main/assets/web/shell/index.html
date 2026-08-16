@@ -34,6 +34,7 @@
     <section class="app-menu" role="dialog" aria-modal="true" aria-labelledby="menu-title">
       <div class="menu-app"><span id="menu-mark" class="app-mark" aria-hidden="true"></span><h2 id="menu-title"></h2></div>
       <div id="menu-actions" class="menu-actions">
+        <button id="menu-update" type="button" hidden disabled>Checking for updates…</button>
         <button id="menu-integrate" type="button">Add to Android</button>
         <button id="menu-uninstall" class="danger" type="button">Uninstall</button>
         <button id="menu-cancel" type="button">Cancel</button>
@@ -43,6 +44,14 @@
         <div class="menu-buttons">
           <button id="uninstall-back" type="button">Cancel</button>
           <button id="uninstall-confirm-button" class="danger filled" type="button">Uninstall</button>
+        </div>
+      </div>
+      <div id="update-confirm" class="menu-panel" hidden>
+        <p>This update adds access to:</p>
+        <ul id="update-capabilities" class="capability-list"></ul>
+        <div class="menu-buttons">
+          <button id="update-back" type="button">Cancel</button>
+          <button id="update-confirm-button" class="primary filled" type="button">Update</button>
         </div>
       </div>
       <div id="menu-message" class="menu-panel" hidden>

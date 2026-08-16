@@ -32,6 +32,9 @@ h2 { margin: 0 0 22px; font-size: .82rem; color: #697078; text-transform: upperc
 .menu-buttons { display: flex; justify-content: flex-end; gap: 8px; }
 .menu-panel .filled { color: #fff !important; background: #a33d2e; }
 .menu-panel .filled:hover, .menu-panel .filled:focus-visible { background: #8d3025; }
+.menu-panel .primary.filled { background: #176b5a; }
+.menu-panel .primary.filled:hover, .menu-panel .primary.filled:focus-visible { background: #105747; }
+.capability-list { margin: -8px 6px 20px; padding-left: 24px; color: #30383f; line-height: 1.6; }
 .menu-wide-button { width: 100%; text-align: center; }
 
 @media (max-width: 620px) {

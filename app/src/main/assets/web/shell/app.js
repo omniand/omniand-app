@@ -5,6 +5,7 @@ const backdrop = document.querySelector('#menu-backdrop');
 const menuTitle = document.querySelector('#menu-title');
 const menuMark = document.querySelector('#menu-mark');
 const integrateButton = document.querySelector('#menu-integrate');
+const updateButton = document.querySelector('#menu-update');
 const uninstallButton = document.querySelector('#menu-uninstall');
 const cancelButton = document.querySelector('#menu-cancel');
 const menuActions = document.querySelector('#menu-actions');
@@ -14,7 +15,13 @@ const uninstallConfirmButton = document.querySelector('#uninstall-confirm-button
 const menuMessage = document.querySelector('#menu-message');
 const menuMessageText = document.querySelector('#menu-message-text');
 const menuMessageClose = document.querySelector('#menu-message-close');
+const updateConfirm = document.querySelector('#update-confirm');
+const updateCapabilities = document.querySelector('#update-capabilities');
+const updateBack = document.querySelector('#update-back');
+const updateConfirmButton = document.querySelector('#update-confirm-button');
 let selectedApp = null;
+let selectedUpdate = null;
+let updateCheckSequence = 0;
 
 function fillIcon(container, app) {
   container.replaceChildren();
@@ -82,32 +89,101 @@ function openMenu(app) {
   fillIcon(menuMark, app);
   integrateButton.hidden = !app.androidIntegration?.supported || app.androidIntegration.installed;
   uninstallButton.hidden = app.id === 'store';
+  selectedUpdate = null;
+  updateButton.hidden = !app.updatable;
+  updateButton.disabled = true;
+  updateButton.textContent = 'Checking for updates…';
   showActions();
   backdrop.hidden = false;
+  if (app.updatable) checkForUpdate(app, ++updateCheckSequence);
 }
 
 function showActions() {
   menuActions.hidden = false;
   uninstallConfirm.hidden = true;
+  updateConfirm.hidden = true;
   menuMessage.hidden = true;
 }
 
 function showUninstallConfirmation() {
   menuActions.hidden = true;
   uninstallConfirm.hidden = false;
+  updateConfirm.hidden = true;
   menuMessage.hidden = true;
 }
 
 function showMessage(message) {
   menuActions.hidden = true;
   uninstallConfirm.hidden = true;
+  updateConfirm.hidden = true;
   menuMessageText.textContent = message;
   menuMessage.hidden = false;
 }
 
 function closeMenu() {
+  updateCheckSequence++;
   backdrop.hidden = true;
   selectedApp = null;
+}
+
+async function checkForUpdate(app, sequence) {
+  try {
+    const response = await fetch(`/api/apps/web/${encodeURIComponent(app.id)}/update`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Update check failed');
+    if (sequence !== updateCheckSequence || selectedApp?.id !== app.id) return;
+    if (!result.available) {
+      updateButton.hidden = true;
+      return;
+    }
+    selectedUpdate = result;
+    updateButton.textContent = `Update to ${result.availableVersion}`;
+    updateButton.disabled = false;
+  } catch (_) {
+    if (sequence !== updateCheckSequence || selectedApp?.id !== app.id) return;
+    updateButton.hidden = false;
+    updateButton.disabled = true;
+    updateButton.textContent = 'Couldn’t check for updates';
+  }
+}
+
+function requestUpdate() {
+  if (!selectedApp || !selectedUpdate) return;
+  if (!selectedUpdate.addedCapabilities.length) {
+    updateApp(selectedApp, selectedUpdate);
+    return;
+  }
+  menuActions.hidden = true;
+  uninstallConfirm.hidden = true;
+  menuMessage.hidden = true;
+  updateCapabilities.replaceChildren(...selectedUpdate.addedCapabilities.map(capability => {
+    const item = document.createElement('li');
+    item.textContent = capability;
+    return item;
+  }));
+  updateConfirm.hidden = false;
+}
+
+function setMenuDisabled(disabled) {
+  document.querySelectorAll('.app-menu button').forEach(button => { button.disabled = disabled; });
+}
+
+async function updateApp(app, update) {
+  setMenuDisabled(true);
+  try {
+    const response = await fetch(`/api/apps/web/${encodeURIComponent(app.id)}/update`, {
+      method: 'POST',
+      headers: {'X-OmniAnd-Update-Version': update.availableVersion}
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Unable to update this app');
+    await loadApps();
+    showMessage(`${app.name} was updated to ${result.newVersion}.`);
+  } catch (error) {
+    showMessage(`${error.message}. Check the Store connection and try again.`);
+  } finally {
+    setMenuDisabled(false);
+  }
 }
 
 async function loadApps() {
@@ -157,9 +233,12 @@ async function uninstallApp(app) {
 }
 
 integrateButton.addEventListener('click', () => selectedApp && addAndroidIntegration(selectedApp));
+updateButton.addEventListener('click', requestUpdate);
 uninstallButton.addEventListener('click', showUninstallConfirmation);
 uninstallBack.addEventListener('click', showActions);
 uninstallConfirmButton.addEventListener('click', () => selectedApp && uninstallApp(selectedApp));
+updateBack.addEventListener('click', showActions);
+updateConfirmButton.addEventListener('click', () => selectedApp && selectedUpdate && updateApp(selectedApp, selectedUpdate));
 menuMessageClose.addEventListener('click', closeMenu);
 cancelButton.addEventListener('click', closeMenu);
 backdrop.addEventListener('click', event => event.target === backdrop && closeMenu());

@@ -48,4 +48,5 @@ dependencies {
     implementation("androidx.core:core:1.15.0")
     implementation("com.android.tools.build:apksig:8.7.3")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

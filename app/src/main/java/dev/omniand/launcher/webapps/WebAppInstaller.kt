@@ -20,6 +20,7 @@ object WebAppInstaller {
     private val knownCapabilities = setOf("sms.read", "sms.send", "sms.modify")
 
     data class Installed(val id: String, val name: String, val version: String, val permissions: Set<String>)
+    data class Expected(val id: String, val version: String, val permissions: Set<String>)
 
     fun uninstall(context: Context, id: String) {
         check(validId.matches(id)) { "Invalid application id" }
@@ -31,7 +32,7 @@ object WebAppInstaller {
         check(target.deleteRecursively()) { "Unable to remove application" }
     }
 
-    fun install(context: Context, packageUrl: String): Installed {
+    fun install(context: Context, packageUrl: String, expected: Expected? = null): Installed {
         requireAllowedOrigin(packageUrl)
         val staging = File(context.cacheDir, "webapp-${UUID.randomUUID()}")
         check(staging.mkdirs()) { "Unable to prepare installation" }
@@ -63,23 +64,35 @@ object WebAppInstaller {
                 check(permission in knownCapabilities) { "Unknown capability" }
                 declaredPermissions += permission
             }
+            validateExpected(Installed(id, name, version, declaredPermissions), expected)
 
             val root = WebAppRegistry.installedRoot(context)
             check(root.exists() || root.mkdirs()) { "Unable to access application storage" }
             val target = File(root, id)
             val backup = File(root, ".$id.backup")
-            if (backup.exists()) backup.deleteRecursively()
-            if (target.exists()) check(target.renameTo(backup)) { "Unable to update application" }
-            try {
-                check(packageRoot.renameTo(target)) { "Unable to activate application" }
-                backup.deleteRecursively()
-            } catch (error: Exception) {
-                if (!target.exists() && backup.exists()) backup.renameTo(target)
-                throw error
-            }
+            activate(packageRoot, target, backup)
             return Installed(id, name, version, declaredPermissions)
         } finally {
             staging.deleteRecursively()
+        }
+    }
+
+    internal fun validateExpected(installed: Installed, expected: Expected?) {
+        if (expected == null) return
+        check(installed.id == expected.id) { "Package application id does not match the catalog" }
+        check(installed.version == expected.version) { "Package version does not match the catalog" }
+        check(installed.permissions == expected.permissions) { "Package capabilities do not match the catalog" }
+    }
+
+    internal fun activate(packageRoot: File, target: File, backup: File, move: (File, File) -> Boolean = { from, to -> from.renameTo(to) }) {
+        if (backup.exists()) backup.deleteRecursively()
+        if (target.exists()) check(move(target, backup)) { "Unable to update application" }
+        try {
+            check(move(packageRoot, target)) { "Unable to activate application" }
+            backup.deleteRecursively()
+        } catch (error: Exception) {
+            if (!target.exists() && backup.exists()) move(backup, target)
+            throw error
         }
     }
 
