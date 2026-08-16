@@ -1,23 +1,45 @@
 <!doctype html>
-<html lang="en">
+<html lang="fr">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <title>OmniAnd Launcher</title>
+  <meta name="theme-color" content="#17263f">
+  <title>OmniAnd</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <main class="shell">
-    <aside class="sidebar">
-      <header><h1>Launcher</h1><p>Phone-hosted apps</p></header>
-      <section><h2>Web apps</h2><div id="web-apps" class="apps"><p class="muted">Loading…</p></div></section>
-      <section id="android-apps-section" hidden><h2>Android apps</h2><div id="android-apps" class="apps"><p class="muted">Loading…</p></div></section>
-    </aside>
-    <section id="stage" class="stage" aria-live="polite">
-      <div class="welcome"><span>O</span><h2>Your phone is the platform</h2><p>Choose an app from the launcher.</p></div>
+    <section id="home" class="home" aria-label="Écran d’accueil">
+      <header class="hero">
+        <div class="clock" aria-live="off">
+          <time id="time">--:--</time>
+          <span id="date"></span>
+        </div>
+        <div class="brand"><span class="brand-mark">O</span><span>OmniAnd</span></div>
+      </header>
+
+      <div class="catalog">
+        <section class="app-section" aria-labelledby="web-title">
+          <h1 id="web-title">Applications Web</h1>
+          <div id="web-apps" class="apps"><p class="muted">Chargement…</p></div>
+        </section>
+        <section id="android-apps-section" class="app-section" aria-labelledby="android-title" hidden>
+          <h2 id="android-title">Applications Android</h2>
+          <div id="android-apps" class="apps"><p class="muted">Chargement…</p></div>
+        </section>
+      </div>
+      <p class="hint">Touchez une icône pour ouvrir une application</p>
     </section>
+
+    <section id="stage" class="stage" aria-live="polite"></section>
   </main>
-  <template id="app-template"><button class="app"><span class="app-icon"></span><span class="app-name"></span><small></small></button></template>
+
+  <template id="app-template">
+    <button class="app" type="button">
+      <span class="app-icon" aria-hidden="true"></span>
+      <span class="app-name"></span>
+    </button>
+  </template>
   <script src="/app.js" defer></script>
 </body>
 </html>

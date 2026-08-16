@@ -13,7 +13,10 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+        buildConfigField("String", "STORE_URL", "\"http://192.168.1.11:5173/\"")
     }
+
+    buildFeatures { buildConfig = true }
 
     buildTypes {
         release {

@@ -129,3 +129,6 @@ adb forward tcp:8080 tcp:8080
 ## Scope control
 
 This repository is intentionally a POC. Do not add an app store, SMS sending, calls, cloud synchronization, remote Internet access, JavaScript compatibility layers, WebRTC, WebSockets, or advanced package management unless explicitly requested.
+
+
+Check and update the ./MEMORY.MD file everytime.

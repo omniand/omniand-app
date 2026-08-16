@@ -2,8 +2,11 @@ package dev.omniand.launcher.services
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 
 class AndroidAppsService(private val context: Context) {
     fun list(): JSONArray {
@@ -27,4 +30,17 @@ class AndroidAppsService(private val context: Context) {
         context.startActivity(intent)
         return true
     }
+
+    fun icon(packageName: String): ByteArray? = runCatching {
+        val drawable = context.packageManager.getApplicationIcon(packageName)
+        val size = 144
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        drawable.setBounds(0, 0, size, size)
+        drawable.draw(Canvas(bitmap))
+        ByteArrayOutputStream().use { output ->
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+            bitmap.recycle()
+            output.toByteArray()
+        }
+    }.getOrNull()
 }
