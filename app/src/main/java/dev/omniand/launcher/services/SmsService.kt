@@ -15,13 +15,23 @@ import dev.omniand.launcher.sms.SmsSetupManager
 import dev.omniand.launcher.sms.SmsSendResultReceiver
 import dev.omniand.launcher.sms.SmsSendTracker
 
+enum class SmsDelivery(val apiValue: String) {
+    RECEIVED("received"),
+    OUTBOX("outbox"),
+    PENDING("pending"),
+    SENT("sent"),
+    FAILED("failed");
+
+    val incoming: Boolean get() = this == RECEIVED
+}
+
 data class SmsRecord(
     val id: String,
     val threadId: String,
     val address: String,
     val body: String,
     val timestamp: Long,
-    val incoming: Boolean,
+    val delivery: SmsDelivery,
     val read: Boolean
 )
 
@@ -30,10 +40,20 @@ data class SmsThread(
     val participant: String,
     val body: String,
     val timestamp: Long,
-    val unreadCount: Int
+    val unreadCount: Int,
+    val lastMessageDelivery: SmsDelivery
 )
 
 object SmsMapper {
+    fun delivery(providerType: Int): SmsDelivery? = when (providerType) {
+        Telephony.Sms.MESSAGE_TYPE_INBOX -> SmsDelivery.RECEIVED
+        Telephony.Sms.MESSAGE_TYPE_OUTBOX -> SmsDelivery.OUTBOX
+        Telephony.Sms.MESSAGE_TYPE_QUEUED -> SmsDelivery.PENDING
+        Telephony.Sms.MESSAGE_TYPE_SENT -> SmsDelivery.SENT
+        Telephony.Sms.MESSAGE_TYPE_FAILED -> SmsDelivery.FAILED
+        else -> null
+    }
+
     fun threads(records: List<SmsRecord>): List<SmsThread> = records
         .groupBy { it.threadId }
         .map { (threadId, messages) ->
@@ -43,7 +63,8 @@ object SmsMapper {
                 participant = latest.address,
                 body = latest.body,
                 timestamp = latest.timestamp,
-                unreadCount = messages.count { it.incoming && !it.read }
+                unreadCount = messages.count { it.delivery.incoming && !it.read },
+                lastMessageDelivery = latest.delivery
             )
         }
         .sortedWith(compareByDescending<SmsThread> { it.timestamp }.thenByDescending { it.id })
@@ -75,6 +96,7 @@ class SmsService(private val context: Context) {
             .put("timestamp", thread.timestamp)
             .put("unreadCount", thread.unreadCount)
             .put("lastMessageType", "sms")
+            .put("lastMessageDelivery", thread.lastMessageDelivery.apiValue)
     })
 
     fun messages(rawThreadId: String): JSONArray {
@@ -106,7 +128,10 @@ class SmsService(private val context: Context) {
             SmsSendTracker.failImmediately(context, messageId)
             throw error
         }
-        return JSONObject().put("sent", true).put("id", messageId)
+        return JSONObject()
+            .put("accepted", true)
+            .put("id", messageId)
+            .put("delivery", SmsDelivery.OUTBOX.apiValue)
     }
 
     private fun persistOutgoing(address: String, body: String): Uri {
@@ -206,13 +231,14 @@ class SmsService(private val context: Context) {
             val type = cursor.getColumnIndexOrThrow(Telephony.Sms.TYPE)
             val read = cursor.getColumnIndexOrThrow(Telephony.Sms.READ)
             while (cursor.moveToNext()) {
+                val delivery = SmsMapper.delivery(cursor.getInt(type)) ?: continue
                 result += SmsRecord(
                     id = cursor.getString(id),
                     threadId = cursor.getString(threadId),
                     address = cursor.getString(address) ?: "Unknown",
                     body = cursor.getString(body) ?: "",
                     timestamp = cursor.getLong(date),
-                    incoming = cursor.getInt(type) == Telephony.Sms.MESSAGE_TYPE_INBOX,
+                    delivery = delivery,
                     read = cursor.getInt(read) != 0
                 )
             }
@@ -244,18 +270,19 @@ class SmsService(private val context: Context) {
         .put("address", message.address)
         .put("body", message.body)
         .put("date", message.timestamp)
-        .put("type", if (message.incoming) "received" else "sent")
+        .put("type", if (message.delivery.incoming) "received" else "sent")
+        .put("delivery", message.delivery.apiValue)
 
     private fun messageJson(message: SmsRecord) = JSONObject()
         .put("id", message.id)
         .put("threadId", message.threadId)
         .put("type", "sms")
-        .put("sender", if (message.incoming) message.address else JSONObject.NULL)
-        .put("receiver", if (message.incoming) JSONObject.NULL else message.address)
+        .put("sender", if (message.delivery.incoming) message.address else JSONObject.NULL)
+        .put("receiver", if (message.delivery.incoming) JSONObject.NULL else message.address)
         .put("body", message.body)
         .put("timestamp", message.timestamp)
         .put("read", message.read)
-        .put("delivery", if (message.incoming) "received" else "sent")
+        .put("delivery", message.delivery.apiValue)
 
     private companion object {
         const val WRITE_SMS_PERMISSION = "android.permission.WRITE_SMS"

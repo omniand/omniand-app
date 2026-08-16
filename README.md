@@ -1,6 +1,8 @@
-# OmniAnd POC
+# OmniAnd
 
 OmniAnd is a normal Android application that hosts a Web application platform. It does not replace Android's HOME launcher. Android supplies capabilities behind same-origin HTTP APIs; Web content uses standard browser APIs and has no JavaScript/native bridge.
+
+The current implementation status and remaining engineering work are tracked in [`STATUS.md`](STATUS.md).
 
 ## Architecture
 
@@ -13,7 +15,7 @@ For desktop access, wildcard DNS must point the canonical hostnames at the phone
 | Canonical host | Role | Capabilities |
 |---|---|---|
 | `phone.example.org` | Shared Platform Home and management APIs | Lists and manages Web apps |
-| `messages.phone.example.org` | Messages | `sms.read` |
+| `messages.phone.example.org` | Messages | `sms.read`, `sms.send`, `sms.modify` |
 | `test.phone.example.org` | Permission test | None |
 | `store.phone.example.org` | Store manager | `apps.install` |
 
@@ -32,7 +34,7 @@ Requirements are JDK 17 or 21 and Android SDK 35.
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Open **OmniAnd** from the user's normal Android launcher. Android asks for SMS read permission; denial is safe and Messages displays the API error.
+Open **OmniAnd** from the user's normal Android launcher. Installing an application that declares SMS capabilities starts or defers the required Android role and permission setup. Declining setup leaves the Web application installed, and Messages reports actionable API errors when a required permission or role is missing.
 
 The development Store URL is configured with `STORE_URL` in `app/build.gradle.kts`. Its current HTTP value is intended only for trusted local development. Use HTTPS for desktop embedding and production-like testing.
 
@@ -44,7 +46,7 @@ node --check app/src/main/assets/web/apps/store/app.js
 ./gradlew assembleDebug
 ```
 
-On a device, verify that the normal launcher starts OmniAnd, Messages receives SMS data when Android permission is granted, and Permission test receives `403 Forbidden`. Disable networking and confirm Android still loads all canonical platform origins. For desktop testing, configure wildcard DNS and trusted TLS termination before opening `https://phone.example.org/`.
+On a device, verify that the normal launcher starts OmniAnd; Messages can read, receive, send, update, and delete SMS when the required Android role and permissions are granted; and Permission test receives `403 Forbidden`. Disable networking and confirm Android still loads all canonical platform origins. For desktop testing, configure wildcard DNS and trusted TLS termination before opening `https://phone.example.org/`.
 
 For wrapper validation, select **Add to Android** under any installed Web app, approve the Android package-installer flow, and verify that a separate launcher entry appears and opens the same hosted Web app. Repeating the operation for the same app should offer an update to the existing wrapper; a different app should receive a different Android package identity.
 

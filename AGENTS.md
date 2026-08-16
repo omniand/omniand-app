@@ -2,7 +2,7 @@
 
 ## Project purpose
 
-OmniAnd is an Android a phone-hosted Web platform. The APK is simultaneously:
+OmniAnd is an Android phone-hosted Web platform. The APK is simultaneously:
 
 - a normal Android application with a shared Platform Home;
 - an HTTP application server;
@@ -128,7 +128,9 @@ For the project, verify all of the following on an Android device or AVD:
 
 ## Scope control
 
-Preserve the existing Store/package installation path and generic on-demand wrapper generation, but do not add SMS sending, calls, cloud synchronization, remote Internet access, JavaScript compatibility layers, WebRTC, WebSockets, or advanced package management unless explicitly requested. Android wrapper APK integration is a separate optional layer; do not duplicate Web packages into wrappers.
+Preserve the existing Store/package installation path, SMS read/send/modify support, incoming-message handling, notifications, and generic on-demand wrapper generation. Do not add calls, cloud synchronization, remote Internet access, JavaScript compatibility layers, WebRTC, WebSockets, MMS completion, or advanced package management unless explicitly requested. Android wrapper APK integration is a separate optional layer; do not duplicate Web packages into wrappers.
+
+OmniAnd is an actively developed, production-oriented platform. Describe limitations using their concrete security, deployment, feature, or validation status rather than applying a general maturity label.
 
 
 Check and update the ./MEMORY.md file everytime.
