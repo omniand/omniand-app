@@ -1,5 +1,6 @@
 package dev.omniand.launcher.wrappers
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -40,8 +41,14 @@ object WrapperInstaller {
         val packageName = packageName(appId)
         val info = runCatching { context.packageManager.getApplicationInfo(packageName, PackageManager.GET_META_DATA) }.getOrNull()
         val version = info?.metaData?.getInt("dev.omniand.RELAY_VERSION", 0) ?: 0
-        return JSONObject().put("installed", info != null).put("available", info != null && version == 1)
-            .put("protocolVersion", version).put("updateAvailable", info != null && version != 1)
+        val notificationsPermission = info != null && (Build.VERSION.SDK_INT < 33 ||
+            context.packageManager.checkPermission(Manifest.permission.POST_NOTIFICATIONS, packageName) == PackageManager.PERMISSION_GRANTED)
+        return JSONObject().put("installed", info != null)
+            .put("available", info != null && version == 1 && notificationsPermission)
+            .put("protocolVersion", version)
+            .put("notificationsPermission", notificationsPermission)
+            .put("permissionRequired", info != null && version == 1 && !notificationsPermission)
+            .put("updateAvailable", info != null && version != 1)
     }
 
     fun isTrustedWrapper(context: Context, appId: String): Boolean = runCatching {

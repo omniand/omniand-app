@@ -77,7 +77,12 @@ public final class NotificationRelayService extends Service {
         if (!thread.matches("[0-9]+") || title == null || preview == null || title.length() > 160 || preview.length() > 500) return false;
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false;
         if (Build.VERSION.SDK_INT >= 26) manager().createNotificationChannel(new NotificationChannel(CHANNEL, "Messages", NotificationManager.IMPORTANCE_HIGH));
-        Intent click = new Intent(this, MainActivity.class).putExtra("route", "#/thread?id=" + thread).putExtra("threadId", thread);
+        Intent click = new Intent()
+            .setClassName("dev.omniand.launcher", "dev.omniand.launcher.WebAppActivity")
+            .putExtra("appId", appId)
+            .putExtra("androidIntegration", true)
+            .putExtra("route", "#/thread?id=" + thread)
+            .putExtra("threadId", thread);
         PendingIntent pending = PendingIntent.getActivity(this, id, click, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         NotificationCompat.Builder publicBuilder = new NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.sym_action_chat).setContentTitle("Messages").setContentText("New message");

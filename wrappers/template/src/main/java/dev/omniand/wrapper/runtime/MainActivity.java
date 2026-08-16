@@ -11,12 +11,25 @@ import android.Manifest;
 import android.widget.Toast;
 
 public final class MainActivity extends Activity {
+    private static final int NOTIFICATION_PERMISSION_REQUEST = 41;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 41);
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, NOTIFICATION_PERMISSION_REQUEST);
+            return;
         }
+        openPlatformAndFinish();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == NOTIFICATION_PERMISSION_REQUEST) openPlatformAndFinish();
+    }
+
+    private void openPlatformAndFinish() {
         try {
             ApplicationInfo info = getPackageManager().getApplicationInfo(getPackageName(), PackageManager.GET_META_DATA);
             String appId = info.metaData.getString("dev.omniand.APP_ID");

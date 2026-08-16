@@ -87,7 +87,8 @@ function openMenu(app) {
   selectedApp = app;
   menuTitle.textContent = app.name;
   fillIcon(menuMark, app);
-  integrateButton.hidden = !app.androidIntegration?.supported || app.androidIntegration.installed;
+  integrateButton.hidden = !app.androidIntegration?.supported;
+  integrateButton.textContent = app.androidIntegration.installed ? 'Update Android integration' : 'Add to Android';
   uninstallButton.hidden = app.id === 'store';
   selectedUpdate = null;
   updateButton.hidden = !app.updatable;
