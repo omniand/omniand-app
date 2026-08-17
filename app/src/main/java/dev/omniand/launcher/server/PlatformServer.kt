@@ -357,16 +357,13 @@ object PlatformServer {
                 headers["x-omniand-mms-uploads"]?.let {
                     URLDecoder.decode(it, "UTF-8")
                 }
-            if (!subject.isNullOrBlank() || !uploads.isNullOrBlank())
-                return codedError(
-                    501,
-                    "mms-transport-unavailable",
-                    "MMS carrier composition is not available in this build",
-                )
             return smsMutation(context, app, "sms.send") {
                 it.send(
                     requiredHeader(headers, "x-omniand-sms-address"),
                     requiredHeader(headers, "x-omniand-sms-body"),
+                    subject,
+                    uploads?.split(',')?.filter { id -> id.isNotBlank() }.orEmpty(),
+                    app!!.id,
                 )
             }
         }
@@ -402,23 +399,44 @@ object PlatformServer {
         if (messageRead != null && method == "POST") {
             return smsMutation(context, app, "sms.modify") {
                 it.setRead(
-                        messageRead.groupValues[1],
+                        URLDecoder.decode(messageRead.groupValues[1], "UTF-8"),
                         requiredHeader(headers, "x-omniand-sms-read"),
                     )
                     .also { result ->
                         if (result.optBoolean("read"))
                             SmsNotifications.cancelThread(context, result.getString("threadId"))
-                        SmsReadEventPublisher.publishMessage(messageRead.groupValues[1])
+                        SmsReadEventPublisher.publishMessage(
+                            URLDecoder.decode(messageRead.groupValues[1], "UTF-8")
+                        )
                     }
+            }
+        }
+        val messagePart = Regex("^/api/sms/messages/([^/]+)/parts/([^/]+)$").matchEntire(path)
+        if (messagePart != null && method == "GET") {
+            return smsPart(
+                context,
+                app,
+                URLDecoder.decode(messagePart.groupValues[1], "UTF-8"),
+                messagePart.groupValues[2],
+                headers["range"],
+            )
+        }
+        val messageDownload = Regex("^/api/sms/messages/([^/]+)/download$").matchEntire(path)
+        if (messageDownload != null && method == "POST") {
+            return smsMutation(context, app, "sms.read") {
+                it.retryDownload(URLDecoder.decode(messageDownload.groupValues[1], "UTF-8"))
             }
         }
         val singleMessage = Regex("^/api/sms/messages/([^/]+)$").matchEntire(path)
         if (singleMessage != null && method == "GET") {
-            return sms(context, app) { it.message(singleMessage.groupValues[1]) }
+            return sms(context, app) {
+                it.message(URLDecoder.decode(singleMessage.groupValues[1], "UTF-8"))
+            }
         }
         if (singleMessage != null && method == "DELETE") {
             return smsMutation(context, app, "sms.modify") {
-                it.deleteMessage(singleMessage.groupValues[1]).also { result ->
+                it.deleteMessage(URLDecoder.decode(singleMessage.groupValues[1], "UTF-8")).also {
+                    result ->
                     SmsNotifications.cancelThread(context, result.getString("threadId"))
                 }
             }
@@ -677,6 +695,67 @@ object PlatformServer {
         return sms(context, app) { it.recent() }
     }
 
+    private fun smsPart(
+        context: Context,
+        app: WebApp?,
+        messageId: String,
+        partId: String,
+        range: String?,
+    ): Response {
+        if (!PermissionManager.hasCapability(context, app?.id, "sms.read"))
+            return codedError(403, "missing-capability", "Missing capability: sms.read")
+        return try {
+            val part = SmsService(context).part(messageId, partId)
+            val disposition = if (part.inline) "inline" else "attachment"
+            val headers =
+                mutableMapOf(
+                    "Accept-Ranges" to "bytes",
+                    "Content-Disposition" to "$disposition; filename=\"${part.name}\"",
+                )
+            val match = range?.let { Regex("^bytes=(\\d*)-(\\d*)$").matchEntire(it) }
+            if (range != null && match == null) return error(416, "Invalid byte range")
+            if (match == null)
+                Response.bytes(
+                    "200 OK",
+                    if (part.inline) part.mime else "application/octet-stream",
+                    part.bytes,
+                    headers,
+                )
+            else {
+                val rawStart = match.groupValues[1]
+                val rawEnd = match.groupValues[2]
+                if (rawStart.isBlank() && rawEnd.isBlank()) return error(416, "Invalid byte range")
+                val suffix = if (rawStart.isBlank()) rawEnd.toIntOrNull() else null
+                if (suffix != null && suffix <= 0) return error(416, "Invalid byte range")
+                val start =
+                    if (suffix != null) (part.bytes.size - suffix).coerceAtLeast(0)
+                    else rawStart.toIntOrNull() ?: return error(416, "Invalid byte range")
+                val end =
+                    if (suffix != null) part.bytes.size - 1
+                    else rawEnd.toIntOrNull() ?: (part.bytes.size - 1)
+                if (start !in part.bytes.indices || end < start || end >= part.bytes.size)
+                    return error(416, "Invalid byte range")
+                headers["Content-Range"] = "bytes $start-$end/${part.bytes.size}"
+                Response.bytes(
+                    "206 Partial Content",
+                    if (part.inline) part.mime else "application/octet-stream",
+                    part.bytes.copyOfRange(start, end + 1),
+                    headers,
+                )
+            }
+        } catch (_: SmsService.PermissionMissing) {
+            codedError(
+                403,
+                "android-permission-required",
+                "Android SMS permission has not been granted",
+            )
+        } catch (_: SmsService.InvalidId) {
+            error(400, "Invalid MMS part identifier")
+        } catch (_: SmsService.NotFound) {
+            error(404, "MMS part not found")
+        }
+    }
+
     private fun contactsRead(
         context: Context,
         app: WebApp?,
@@ -809,6 +888,8 @@ object PlatformServer {
             error(400, "Invalid SMS identifier")
         } catch (_: SmsService.NotFound) {
             error(404, "SMS resource not found")
+        } catch (error: SmsService.MmsUnavailable) {
+            codedError(400, error.code, "Carrier MMS requirements are not met")
         } catch (error: SecurityException) {
             Log.w(TAG, "SMS mutation denied by Android", error)
             codedError(
@@ -827,7 +908,8 @@ object PlatformServer {
             ?: throw SmsService.InvalidInput()
 
     private fun requiredUploadHeader(headers: Map<String, String>, name: String): String =
-        headers[name] ?: throw MmsUploadStore.Invalid("invalid-upload")
+        headers[name]?.takeIf { it.length <= MAX_UPLOAD_HEADER }
+            ?: throw MmsUploadStore.Invalid("invalid-upload")
 
     private fun uploadOperation(operation: () -> JSONObject): Response =
         try {
@@ -926,12 +1008,14 @@ object PlatformServer {
     private fun status(code: Int) =
         when (code) {
             200 -> "200 OK"
+            206 -> "206 Partial Content"
             400 -> "400 Bad Request"
             403 -> "403 Forbidden"
             404 -> "404 Not Found"
             409 -> "409 Conflict"
             501 -> "501 Not Implemented"
             413 -> "413 Payload Too Large"
+            416 -> "416 Range Not Satisfiable"
             else -> "500 Internal Server Error"
         }
 
@@ -986,6 +1070,13 @@ object PlatformServer {
             }
 
         companion object {
+            fun bytes(
+                status: String,
+                contentType: String,
+                body: ByteArray,
+                headers: Map<String, String>,
+            ) = Response(status, contentType, body, null, null, headers)
+
             fun stream(
                 status: String,
                 contentType: String,
@@ -1000,4 +1091,5 @@ object PlatformServer {
     private const val MAX_CONTACT_JSON = 96 * 1024
     private const val MAX_CONTACT_PHOTO = 256 * 1024
     private const val MAX_PHOTO_HEADER = 400 * 1024
+    private const val MAX_UPLOAD_HEADER = 33 * 1024
 }

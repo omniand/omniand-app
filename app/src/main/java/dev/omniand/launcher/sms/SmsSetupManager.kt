@@ -64,6 +64,7 @@ object SmsSetupManager {
             .put("defaultSmsApp", isRoleHeld(context))
             .put("readPermission", granted(context, Manifest.permission.READ_SMS))
             .put("sendPermission", granted(context, Manifest.permission.SEND_SMS))
+            .put("phoneStatePermission", granted(context, Manifest.permission.READ_PHONE_STATE))
             .put(
                 "notificationsPermission",
                 Build.VERSION.SDK_INT < 33 ||
@@ -137,6 +138,8 @@ class SmsSetupActivity : Activity() {
         val permissions = mutableListOf<String>()
         if ("sms.read" in caps || "sms.modify" in caps) permissions += Manifest.permission.READ_SMS
         if ("sms.send" in caps || "sms.modify" in caps) permissions += Manifest.permission.SEND_SMS
+        if ("sms.send" in caps || "sms.modify" in caps)
+            permissions += Manifest.permission.READ_PHONE_STATE
         if (Build.VERSION.SDK_INT >= 33) permissions += Manifest.permission.POST_NOTIFICATIONS
         val missing =
             permissions.distinct().filter {

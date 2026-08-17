@@ -99,6 +99,15 @@ class MmsUploadStore(
     }
 
     @Synchronized
+    fun consume(owner: String, ids: List<String>) {
+        ids.forEach { id ->
+            state(owner, id)
+            metadata(id).delete()
+            payload(id).delete()
+        }
+    }
+
+    @Synchronized
     fun cleanup() {
         if (!root.isDirectory) return
         root
