@@ -8,6 +8,7 @@ import dev.omniand.launcher.contacts.ContactsSetupManager
 import dev.omniand.launcher.permissions.PermissionManager
 import dev.omniand.launcher.services.ContactsService
 import dev.omniand.launcher.services.SmsService
+import dev.omniand.launcher.sms.MmsUploadStore
 import dev.omniand.launcher.sms.SmsEventBroadcaster
 import dev.omniand.launcher.sms.SmsNotifications
 import dev.omniand.launcher.sms.SmsReadEventPublisher
@@ -310,7 +311,58 @@ object PlatformServer {
         }
         if (path == "/api/sms/threads" && method == "GET")
             return sms(context, app) { it.threads(query["offset"], query["limit"]) }
+        if (path == "/api/sms/uploads" && method == "POST") {
+            if (!PermissionManager.hasCapability(context, app?.id, "sms.send"))
+                return codedError(403, "missing-capability", "Missing capability: sms.send")
+            return uploadOperation {
+                MmsUploadStore(context)
+                    .create(
+                        app!!.id,
+                        decodedHeader(headers, "x-omniand-upload-name", 512),
+                        decodedHeader(headers, "x-omniand-upload-type", 256),
+                        requiredUploadHeader(headers, "x-omniand-upload-size").toLongOrNull()
+                            ?: throw MmsUploadStore.Invalid("invalid-upload"),
+                        requiredUploadHeader(headers, "x-omniand-upload-sha256"),
+                    )
+            }
+        }
+        val upload = Regex("^/api/sms/uploads/([^/]+)(?:/(complete|abort))?$").matchEntire(path)
+        if (upload != null && method == "POST") {
+            if (!PermissionManager.hasCapability(context, app?.id, "sms.send"))
+                return codedError(403, "missing-capability", "Missing capability: sms.send")
+            return uploadOperation {
+                val store = MmsUploadStore(context)
+                val id = upload.groupValues[1]
+                when (upload.groupValues[2]) {
+                    "complete" -> store.complete(app!!.id, id)
+                    "abort" -> store.abort(app!!.id, id)
+                    else ->
+                        store.append(
+                            app!!.id,
+                            id,
+                            requiredUploadHeader(headers, "x-omniand-upload-index").toIntOrNull()
+                                ?: throw MmsUploadStore.Invalid("invalid-upload-chunk"),
+                            Base64.getDecoder()
+                                .decode(requiredUploadHeader(headers, "x-omniand-upload-chunk")),
+                        )
+                }
+            }
+        }
         if (path == "/api/sms/messages" && method == "POST") {
+            val subject =
+                headers["x-omniand-mms-subject"]?.let {
+                    URLDecoder.decode(it, "UTF-8")
+                }
+            val uploads =
+                headers["x-omniand-mms-uploads"]?.let {
+                    URLDecoder.decode(it, "UTF-8")
+                }
+            if (!subject.isNullOrBlank() || !uploads.isNullOrBlank())
+                return codedError(
+                    501,
+                    "mms-transport-unavailable",
+                    "MMS carrier composition is not available in this build",
+                )
             return smsMutation(context, app, "sms.send") {
                 it.send(
                     requiredHeader(headers, "x-omniand-sms-address"),
@@ -774,6 +826,21 @@ object PlatformServer {
         headers[name]?.let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrNull() }
             ?: throw SmsService.InvalidInput()
 
+    private fun requiredUploadHeader(headers: Map<String, String>, name: String): String =
+        headers[name] ?: throw MmsUploadStore.Invalid("invalid-upload")
+
+    private fun uploadOperation(operation: () -> JSONObject): Response =
+        try {
+            json(200, operation())
+        } catch (error: MmsUploadStore.Invalid) {
+            codedError(400, error.code, "Invalid MMS attachment upload")
+        } catch (_: IllegalArgumentException) {
+            codedError(400, "invalid-upload-chunk", "Invalid MMS attachment upload")
+        } catch (error: Exception) {
+            Log.e(TAG, "MMS upload failed", error)
+            codedError(500, "upload-failed", "Unable to store MMS attachment")
+        }
+
     private fun removeWebApp(context: Context, id: String, isLocalWebView: Boolean): Response {
         return try {
             val appToRemove =
@@ -863,6 +930,7 @@ object PlatformServer {
             403 -> "403 Forbidden"
             404 -> "404 Not Found"
             409 -> "409 Conflict"
+            501 -> "501 Not Implemented"
             413 -> "413 Payload Too Large"
             else -> "500 Internal Server Error"
         }
