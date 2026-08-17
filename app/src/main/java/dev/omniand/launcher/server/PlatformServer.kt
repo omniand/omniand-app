@@ -5,6 +5,9 @@ import android.util.Log
 import dev.omniand.launcher.BuildConfig
 import dev.omniand.launcher.permissions.PermissionManager
 import dev.omniand.launcher.services.SmsService
+import dev.omniand.launcher.services.ContactsService
+import dev.omniand.launcher.contacts.ContactsEventBroadcaster
+import dev.omniand.launcher.contacts.ContactsSetupManager
 import dev.omniand.launcher.webapps.WebApp
 import dev.omniand.launcher.webapps.WebAppInstaller
 import dev.omniand.launcher.webapps.WebAppRegistry
@@ -25,6 +28,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.Base64
 
 object PlatformServer {
     const val PORT = 8080
@@ -34,6 +38,7 @@ object PlatformServer {
     fun start(context: Context) {
         if (!started.compareAndSet(false, true)) return
         val appContext = context.applicationContext
+        ContactsEventBroadcaster.start(appContext)
         val ready = CountDownLatch(1)
         Thread({ serve(appContext, ready) }, "platform-http-$PORT").apply {
             isDaemon = true
@@ -67,7 +72,9 @@ object PlatformServer {
         val parts = request.split(' ')
         if (parts.size < 2) return
         val method = parts[0]
-        val path = parts[1].substringBefore('?')
+        val target = parts[1]
+        val path = target.substringBefore('?')
+        val query = parseQuery(target.substringAfter('?', ""))
         var host = "127.0.0.1"
         var contentLength = 0
         val requestHeaders = mutableMapOf<String, String>()
@@ -92,7 +99,7 @@ object PlatformServer {
             }
         }
 
-        val response = route(context, method, path, host.lowercase(), isLocalWebView = false, requestHeaders)
+        val response = route(context, method, path, query, host.lowercase(), isLocalWebView = false, requestHeaders)
         write(output, response)
     }
 
@@ -117,11 +124,49 @@ object PlatformServer {
     }
 
     fun localResponse(context: Context, method: String, path: String, host: String, headers: Map<String, String> = emptyMap()): Response =
-        route(context.applicationContext, method, path.substringBefore('?'), host.lowercase(), isLocalWebView = true,
+        route(context.applicationContext, method, path.substringBefore('?'), parseQuery(path.substringAfter('?', "")), host.lowercase(), isLocalWebView = true,
             headers.mapKeys { it.key.lowercase() })
 
-    private fun route(context: Context, method: String, path: String, host: String, isLocalWebView: Boolean, headers: Map<String, String>): Response {
+    private fun route(context: Context, method: String, path: String, query: Map<String, String>, host: String, isLocalWebView: Boolean, headers: Map<String, String>): Response {
         val app = WebAppRegistry.byHost(context, host)
+        if (path == "/api/contacts/setup" && method == "GET") {
+            if (!hasContactsCapability(context, app)) return codedError(403, "missing-capability", "Missing Contacts capability")
+            return json(200, ContactsSetupManager.state(context))
+        }
+        if (path == "/api/contacts/setup/request" && method == "POST") {
+            if (!hasContactsCapability(context, app)) return codedError(403, "missing-capability", "Missing Contacts capability")
+            if (!isLocalWebView) return codedError(403, "phone-local-required", "Contacts setup can only be opened on the phone")
+            ContactsSetupManager.request(context, app?.permissions.orEmpty())
+            return json(200, JSONObject().put("opened", true))
+        }
+        if (path == "/api/contacts/events" && method == "GET") {
+            if (!PermissionManager.hasCapability(context, app?.id, "contacts.read")) return codedError(403, "missing-capability", "Missing capability: contacts.read")
+            return Response.stream("200 OK", "text/event-stream; charset=utf-8", { ContactsEventBroadcaster.subscribe(isLocalWebView) },
+                mapOf("Cache-Control" to "no-cache, no-transform", "X-Accel-Buffering" to "no"))
+        }
+        if (path == "/api/contacts" && method == "GET") return contactsRead(context, app) {
+            it.list(query["q"], query["offset"]?.toIntOrNull() ?: 0, query["limit"]?.toIntOrNull() ?: 50)
+        }
+        if (path == "/api/contacts/accounts" && method == "GET") return contactsRead(context, app) { it.accounts() }
+        if (path == "/api/contacts/matches" && method == "POST") return contactsRead(context, app) {
+            it.match(JSONArray(decodedHeader(headers, "x-omniand-contacts-numbers", MAX_CONTACT_JSON)))
+        }
+        if (path == "/api/contacts" && method == "POST") return contactsWrite(context, app) {
+            it.create(JSONObject(decodedHeader(headers, "x-omniand-contacts-data", MAX_CONTACT_JSON)))
+        }
+        val contactPhoto = Regex("^/api/contacts/([^/]+)/photo$").matchEntire(path)
+        if (contactPhoto != null && method == "GET") return contactsPhoto(context, app, URLDecoder.decode(contactPhoto.groupValues[1], "UTF-8"))
+        if (contactPhoto != null && method in setOf("PUT", "DELETE")) return contactsWrite(context, app) {
+            val bytes = if (method == "DELETE") null else Base64.getDecoder().decode(decodedHeader(headers, "x-omniand-contacts-photo", MAX_PHOTO_HEADER))
+            if (bytes != null && bytes.size > MAX_CONTACT_PHOTO) throw ContactsService.InvalidInput()
+            it.setPhoto(URLDecoder.decode(contactPhoto.groupValues[1], "UTF-8"), decodedHeader(headers, "x-omniand-contacts-source", 256),
+                requireIfMatch(headers), bytes)
+        }
+        val contactPath = Regex("^/api/contacts/([^/]+)$").matchEntire(path)
+        if (contactPath != null && method == "GET") return contactsRead(context, app) { it.detail(URLDecoder.decode(contactPath.groupValues[1], "UTF-8")) }
+        if (contactPath != null && method == "PUT") return contactsWrite(context, app) { it.update(URLDecoder.decode(contactPath.groupValues[1], "UTF-8"),
+            decodedHeader(headers, "x-omniand-contacts-source", 256), requireIfMatch(headers), JSONObject(decodedHeader(headers, "x-omniand-contacts-data", MAX_CONTACT_JSON))) }
+        if (contactPath != null && method == "DELETE") return contactsWrite(context, app) { it.delete(URLDecoder.decode(contactPath.groupValues[1], "UTF-8"), requireIfMatch(headers)) }
         if (path == "/api/sms/setup" && method == "GET") {
             if (!PermissionManager.hasCapability(context, app?.id, "sms.read") &&
                 !PermissionManager.hasCapability(context, app?.id, "sms.send") &&
@@ -201,6 +246,10 @@ object PlatformServer {
                     SmsSetupManager.recordPending(context, installed.permissions)
                     if (isLocalWebView) SmsSetupManager.request(context, installed.permissions)
                 }
+                if (installed.permissions.any { it.startsWith("contacts.") }) {
+                    ContactsSetupManager.recordPending(context, installed.permissions)
+                    if (isLocalWebView && !installed.permissions.any { it.startsWith("sms.") }) ContactsSetupManager.request(context, installed.permissions)
+                }
                 json(200, JSONObject().put("installed", true).put("id", installed.id).put("name", installed.name).put("version", installed.version))
             } catch (error: Exception) {
                 Log.w(TAG, "Web application installation rejected", error)
@@ -264,6 +313,8 @@ object PlatformServer {
                             SmsSetupManager.recordPending(context, result.permissions)
                             SmsSetupManager.request(context, result.permissions)
                         }
+                        val addedContacts = update.addedCapabilities.filterTo(mutableSetOf()) { it.startsWith("contacts.") }
+                        if (addedContacts.isNotEmpty()) ContactsSetupManager.recordPending(context, result.permissions)
                         json(200, JSONObject().put("updated", true).put("id", result.id)
                             .put("previousVersion", update.currentVersion).put("newVersion", result.version))
                     }
@@ -304,6 +355,44 @@ object PlatformServer {
 
     private fun sms(context: Context, app: WebApp?): Response {
         return sms(context, app) { it.recent() }
+    }
+
+    private fun contactsRead(context: Context, app: WebApp?, operation: (ContactsService) -> Any): Response {
+        if (!PermissionManager.hasCapability(context, app?.id, "contacts.read")) return codedError(403, "missing-capability", "Missing capability: contacts.read")
+        return contactsOperation(context, operation)
+    }
+
+    private fun contactsWrite(context: Context, app: WebApp?, operation: (ContactsService) -> Any): Response {
+        if (!PermissionManager.hasCapability(context, app?.id, "contacts.write")) return codedError(403, "missing-capability", "Missing capability: contacts.write")
+        return contactsOperation(context, operation)
+    }
+
+    private fun contactsOperation(context: Context, operation: (ContactsService) -> Any): Response = try {
+        ContactsEventBroadcaster.start(context)
+        json(200, operation(ContactsService(context)))
+    } catch (_: ContactsService.PermissionMissing) { codedError(403, "android-permission-required", "Android Contacts permission has not been granted")
+    } catch (_: ContactsService.InvalidInput) { codedError(400, "invalid-contact-request", "Invalid Contacts request")
+    } catch (_: ContactsService.NotFound) { codedError(404, "contact-not-found", "Contact not found")
+    } catch (_: ContactsService.Conflict) { codedError(409, "stale-contact", "The contact changed; reload before saving")
+    } catch (_: ContactsService.ReadOnly) { codedError(409, "read-only-source", "No selected writable contact source exists")
+    } catch (error: Exception) { Log.e(TAG, "Contacts operation failed", error); codedError(500, "contacts-failed", "Unable to access contacts") }
+
+    private fun contactsPhoto(context: Context, app: WebApp?, key: String): Response {
+        if (!PermissionManager.hasCapability(context, app?.id, "contacts.read")) return codedError(403, "missing-capability", "Missing capability: contacts.read")
+        return try { Response("200 OK", "image/jpeg", ContactsService(context).photo(key)) }
+        catch (_: ContactsService.PermissionMissing) { codedError(403, "android-permission-required", "Android Contacts permission has not been granted") }
+        catch (_: ContactsService.NotFound) { codedError(404, "contact-not-found", "Contact photo not found") }
+    }
+
+    private fun hasContactsCapability(context: Context, app: WebApp?) = PermissionManager.hasCapability(context, app?.id, "contacts.read") || PermissionManager.hasCapability(context, app?.id, "contacts.write")
+    private fun decodedHeader(headers: Map<String, String>, name: String, max: Int): String {
+        val raw = headers[name] ?: throw ContactsService.InvalidInput()
+        if (raw.length > max) throw ContactsService.InvalidInput()
+        return runCatching { URLDecoder.decode(raw, "UTF-8") }.getOrElse { throw ContactsService.InvalidInput() }
+    }
+    private fun requireIfMatch(headers: Map<String, String>) = headers["if-match"]?.trim()?.trim('"')?.takeIf { it.length <= 64 } ?: throw ContactsService.InvalidInput()
+    private fun parseQuery(raw: String): Map<String, String> = raw.split('&').filter { it.isNotBlank() }.associate {
+        URLDecoder.decode(it.substringBefore('='), "UTF-8") to URLDecoder.decode(it.substringAfter('=', ""), "UTF-8")
     }
 
     private fun sms(context: Context, app: WebApp?, operation: (SmsService) -> Any): Response {
@@ -443,4 +532,7 @@ object PlatformServer {
 
     private const val TAG = "OmniAndHttp"
     private const val MAX_REQUEST_BODY = 16 * 1024
+    private const val MAX_CONTACT_JSON = 96 * 1024
+    private const val MAX_CONTACT_PHOTO = 256 * 1024
+    private const val MAX_PHOTO_HEADER = 400 * 1024
 }

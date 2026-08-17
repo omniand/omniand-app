@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
     <uses-permission android:name="android.permission.RECEIVE_MMS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.WRITE_CONTACTS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
 
@@ -41,6 +43,9 @@
             android:exported="true" />
         <activity
             android:name=".sms.SmsSetupActivity"
+            android:exported="false" />
+        <activity
+            android:name=".contacts.ContactsSetupActivity"
             android:exported="false" />
         <activity
             android:name=".sms.SmsSendToActivity"

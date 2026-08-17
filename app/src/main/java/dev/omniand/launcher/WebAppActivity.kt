@@ -8,10 +8,12 @@ import android.text.TextUtils
 import android.view.Gravity
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
+import android.webkit.ValueCallback
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.net.Uri
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -23,6 +25,7 @@ import dev.omniand.launcher.sms.SmsNotifications
 
 class WebAppActivity : Activity() {
     private lateinit var webView: WebView
+    private var fileResult: ValueCallback<Array<Uri>>? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,8 +46,31 @@ class WebAppActivity : Activity() {
                 // development Vite catalog is intentionally served over HTTP.
                 settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             }
-            webChromeClient = WebChromeClient()
+            webChromeClient = object : WebChromeClient() {
+                override fun onShowFileChooser(webView: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean {
+                    fileResult?.onReceiveValue(null)
+                    fileResult = callback
+                    return try {
+                        startActivityForResult(params.createIntent().apply { type = "image/*" }, FILE_CHOOSER)
+                        true
+                    } catch (_: Exception) { fileResult = null; false }
+                }
+            }
             webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    if (!request.isForMainFrame) return false
+                    val uri = request.url
+                    if (uri.scheme == "tel" || uri.scheme == "mailto") {
+                        startActivity(Intent(Intent.ACTION_VIEW, uri)); return true
+                    }
+                    if (uri.scheme == "https" && uri.host == "messages.${BuildConfig.PLATFORM_HOST}") {
+                        val route = uri.fragment?.let { "#$it" }.orEmpty()
+                        if (validRoute(route)) startActivity(Intent(this@WebAppActivity, WebAppActivity::class.java)
+                            .putExtra(EXTRA_APP_ID, "messages").putExtra(EXTRA_ROUTE, route))
+                        return true
+                    }
+                    return false
+                }
                 override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest) =
                     LocalOriginRouter.intercept(applicationContext, request)
             }
@@ -124,11 +150,20 @@ class WebAppActivity : Activity() {
         super.onDestroy()
     }
 
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == FILE_CHOOSER) {
+            fileResult?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data))
+            fileResult = null
+        }
+    }
+
     companion object {
         const val EXTRA_APP_ID = "appId"
         const val EXTRA_ANDROID_INTEGRATION = "androidIntegration"
         const val EXTRA_ROUTE = "route"
         const val EXTRA_THREAD_ID = "threadId"
+        private const val FILE_CHOOSER = 91
         fun validRoute(route: String): Boolean = route.matches(Regex("^#/(thread\\?id=[0-9]+|compose\\?to=[^#&]{0,100}(&body=[^#]{0,2000})?)$"))
     }
 }

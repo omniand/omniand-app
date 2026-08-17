@@ -12,6 +12,7 @@ import dev.omniand.launcher.server.LocalOriginRouter
 import dev.omniand.launcher.server.PlatformServer
 import dev.omniand.launcher.webapps.WebAppRegistry
 import dev.omniand.launcher.sms.SmsSetupManager
+import dev.omniand.launcher.contacts.ContactsSetupManager
 
 class MainActivity : Activity() {
     private lateinit var webView: WebView
@@ -40,7 +41,7 @@ class MainActivity : Activity() {
         }
         setContentView(webView)
 
-        SmsSetupManager.openPendingSetup(this)
+        if (!ContactsSetupManager.openPendingSetup(this)) SmsSetupManager.openPendingSetup(this)
     }
 
     @Deprecated("Deprecated in Java")
