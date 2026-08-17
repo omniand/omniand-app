@@ -8,25 +8,48 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WebAppInstallerTest {
-    @Test fun catalogMetadataMustExactlyMatchPackage() {
-        val packageApp = WebAppInstaller.Installed("messages", "Messages", "2.0.0", setOf("sms.read"))
-        WebAppInstaller.validateExpected(packageApp, WebAppInstaller.Expected("messages", "2.0.0", setOf("sms.read")))
+    @Test
+    fun catalogMetadataMustExactlyMatchPackage() {
+        val packageApp =
+            WebAppInstaller.Installed("messages", "Messages", "2.0.0", setOf("sms.read"))
+        WebAppInstaller.validateExpected(
+            packageApp,
+            WebAppInstaller.Expected("messages", "2.0.0", setOf("sms.read")),
+        )
         assertThrows(IllegalStateException::class.java) {
-            WebAppInstaller.validateExpected(packageApp, WebAppInstaller.Expected("other", "2.0.0", setOf("sms.read")))
+            WebAppInstaller.validateExpected(
+                packageApp,
+                WebAppInstaller.Expected("other", "2.0.0", setOf("sms.read")),
+            )
         }
         assertThrows(IllegalStateException::class.java) {
-            WebAppInstaller.validateExpected(packageApp, WebAppInstaller.Expected("messages", "2.1.0", setOf("sms.read")))
+            WebAppInstaller.validateExpected(
+                packageApp,
+                WebAppInstaller.Expected("messages", "2.1.0", setOf("sms.read")),
+            )
         }
         assertThrows(IllegalStateException::class.java) {
-            WebAppInstaller.validateExpected(packageApp, WebAppInstaller.Expected("messages", "2.0.0", setOf("sms.send")))
+            WebAppInstaller.validateExpected(
+                packageApp,
+                WebAppInstaller.Expected("messages", "2.0.0", setOf("sms.send")),
+            )
         }
     }
 
-    @Test fun failedActivationRestoresPreviousPackage() {
+    @Test
+    fun failedActivationRestoresPreviousPackage() {
         val root = Files.createTempDirectory("omniand-update-test").toFile()
         try {
-            val staged = File(root, "staged").apply { mkdir(); resolve("new").writeText("new") }
-            val target = File(root, "messages").apply { mkdir(); resolve("old").writeText("old") }
+            val staged =
+                File(root, "staged").apply {
+                    mkdir()
+                    resolve("new").writeText("new")
+                }
+            val target =
+                File(root, "messages").apply {
+                    mkdir()
+                    resolve("old").writeText("old")
+                }
             val backup = File(root, ".messages.backup")
             var calls = 0
             assertThrows(IllegalStateException::class.java) {

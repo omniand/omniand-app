@@ -3,7 +3,6 @@ package dev.omniand.launcher.sms
 import android.app.Activity
 import android.app.IntentService
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import dev.omniand.launcher.WebAppActivity
@@ -21,10 +20,14 @@ class SmsSendToActivity : Activity() {
         }
         val address = uri?.schemeSpecificPart?.substringBefore('?').orEmpty()
         val body = uri?.getQueryParameter("body").orEmpty()
-        val route = "#/compose?to=${encode(address)}" + if (body.isNotEmpty()) "&body=${encode(body)}" else ""
-        startActivity(Intent(this, WebAppActivity::class.java)
-            .putExtra(WebAppActivity.EXTRA_APP_ID, "messages")
-            .putExtra(WebAppActivity.EXTRA_ROUTE, route))
+        val route =
+            "#/compose?to=${encode(address)}" +
+                if (body.isNotEmpty()) "&body=${encode(body)}" else ""
+        startActivity(
+            Intent(this, WebAppActivity::class.java)
+                .putExtra(WebAppActivity.EXTRA_APP_ID, "messages")
+                .putExtra(WebAppActivity.EXTRA_ROUTE, route)
+        )
         finish()
     }
 

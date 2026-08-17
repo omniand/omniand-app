@@ -3,16 +3,15 @@ package dev.omniand.launcher
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
-import android.webkit.WebResourceRequest
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import dev.omniand.launcher.BuildConfig
+import dev.omniand.launcher.contacts.ContactsSetupManager
 import dev.omniand.launcher.server.LocalOriginRouter
 import dev.omniand.launcher.server.PlatformServer
-import dev.omniand.launcher.webapps.WebAppRegistry
 import dev.omniand.launcher.sms.SmsSetupManager
-import dev.omniand.launcher.contacts.ContactsSetupManager
+import dev.omniand.launcher.webapps.WebAppRegistry
 
 class MainActivity : Activity() {
     private lateinit var webView: WebView
@@ -21,24 +20,37 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         PlatformServer.start(applicationContext)
 
-        webView = WebView(this).apply {
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.userAgentString = "${settings.userAgentString} OmniAndPlatform/1.0"
-            webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                    if (!request.isForMainFrame) return false
-                    val app = request.url.host?.let { WebAppRegistry.byHost(applicationContext, it) } ?: return false
-                    startActivity(Intent(this@MainActivity, WebAppActivity::class.java).putExtra(WebAppActivity.EXTRA_APP_ID, app.id))
-                    return true
-                }
+        webView =
+            WebView(this).apply {
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.userAgentString = "${settings.userAgentString} OmniAndPlatform/1.0"
+                webViewClient =
+                    object : WebViewClient() {
+                        override fun shouldOverrideUrlLoading(
+                            view: WebView,
+                            request: WebResourceRequest,
+                        ): Boolean {
+                            if (!request.isForMainFrame) return false
+                            val app =
+                                request.url.host?.let {
+                                    WebAppRegistry.byHost(applicationContext, it)
+                                } ?: return false
+                            startActivity(
+                                Intent(this@MainActivity, WebAppActivity::class.java)
+                                    .putExtra(WebAppActivity.EXTRA_APP_ID, app.id)
+                            )
+                            return true
+                        }
 
-                override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest) =
-                    LocalOriginRouter.intercept(applicationContext, request)
+                        override fun shouldInterceptRequest(
+                            view: WebView,
+                            request: WebResourceRequest,
+                        ) = LocalOriginRouter.intercept(applicationContext, request)
+                    }
+                webChromeClient = WebChromeClient()
+                loadUrl("https://${BuildConfig.PLATFORM_HOST}/")
             }
-            webChromeClient = WebChromeClient()
-            loadUrl("https://${BuildConfig.PLATFORM_HOST}/")
-        }
         setContentView(webView)
 
         if (!ContactsSetupManager.openPendingSetup(this)) SmsSetupManager.openPendingSetup(this)
@@ -53,7 +65,10 @@ class MainActivity : Activity() {
         super.onResume()
         if (::webView.isInitialized) {
             webView.post {
-                webView.evaluateJavascript("window.dispatchEvent(new Event('omniand:resume'))", null)
+                webView.evaluateJavascript(
+                    "window.dispatchEvent(new Event('omniand:resume'))",
+                    null,
+                )
             }
         }
     }
@@ -62,5 +77,4 @@ class MainActivity : Activity() {
         webView.destroy()
         super.onDestroy()
     }
-
 }

@@ -3,12 +3,36 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val bundleWrapperTemplate by tasks.registering(Copy::class) {
-    dependsOn(":wrappers:template:assembleDebug")
-    from(rootProject.layout.projectDirectory.file("wrappers/template/build/outputs/apk/debug/template-debug.apk"))
-    into(layout.buildDirectory.dir("generated/wrapperAssets/wrappers"))
-    rename { "template.apk" }
-}
+val bundleWrapperTemplate by
+    tasks.registering(Copy::class) {
+        dependsOn(":wrappers:template:assembleDebug")
+        from(
+            rootProject.layout.projectDirectory.file(
+                "wrappers/template/build/outputs/apk/debug/template-debug.apk"
+            )
+        )
+        into(layout.buildDirectory.dir("generated/wrapperAssets/wrappers"))
+        rename { "template.apk" }
+    }
+
+val embeddedStoreSource = rootProject.layout.projectDirectory.dir("../omniAndStore/apps/store")
+val platformShellSource = rootProject.layout.projectDirectory.dir("../omniAndStore/platform/shell")
+val syncEmbeddedWeb by
+    tasks.registering(Sync::class) {
+        inputs.dir(embeddedStoreSource)
+        inputs.dir(platformShellSource)
+        from(embeddedStoreSource) { into("web/apps/store") }
+        from(platformShellSource) { into("web/shell") }
+        into(layout.buildDirectory.dir("generated/embeddedWebAssets"))
+        doFirst {
+            check(embeddedStoreSource.asFile.isDirectory) {
+                "Embedded Store source is missing at ${embeddedStoreSource.asFile}"
+            }
+            check(platformShellSource.asFile.isDirectory) {
+                "Platform Home source is missing at ${platformShellSource.asFile}"
+            }
+        }
+    }
 
 android {
     namespace = "dev.omniand.launcher"
@@ -29,7 +53,10 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 
@@ -39,10 +66,16 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 
-    sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/wrapperAssets"))
+    sourceSets
+        .getByName("main")
+        .assets
+        .srcDirs(
+            layout.buildDirectory.dir("generated/wrapperAssets"),
+            layout.buildDirectory.dir("generated/embeddedWebAssets"),
+        )
 }
 
-tasks.named("preBuild").configure { dependsOn(bundleWrapperTemplate) }
+tasks.named("preBuild").configure { dependsOn(bundleWrapperTemplate, syncEmbeddedWeb) }
 
 dependencies {
     implementation("androidx.core:core:1.15.0")

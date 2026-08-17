@@ -2,7 +2,6 @@ package dev.omniand.launcher.webapps
 
 import android.content.Context
 import dev.omniand.launcher.BuildConfig
-import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -11,15 +10,23 @@ import java.net.URI
 import java.net.URL
 import java.util.UUID
 import java.util.zip.ZipInputStream
+import org.json.JSONObject
 
 object WebAppInstaller {
     private const val MAX_PACKAGE_BYTES = 5L * 1024 * 1024
     private const val MAX_ENTRY_BYTES = 2L * 1024 * 1024
     private const val MAX_ENTRIES = 100
     private val validId = Regex("[a-z][a-z0-9-]{0,31}")
-    private val knownCapabilities = setOf("sms.read", "sms.send", "sms.modify", "contacts.read", "contacts.write")
+    private val knownCapabilities =
+        setOf("sms.read", "sms.send", "sms.modify", "contacts.read", "contacts.write")
 
-    data class Installed(val id: String, val name: String, val version: String, val permissions: Set<String>)
+    data class Installed(
+        val id: String,
+        val name: String,
+        val version: String,
+        val permissions: Set<String>,
+    )
+
     data class Expected(val id: String, val version: String, val permissions: Set<String>)
 
     fun uninstall(context: Context, id: String) {
@@ -27,7 +34,9 @@ object WebAppInstaller {
         check(id != "store") { "The system Store cannot be removed" }
         val root = WebAppRegistry.installedRoot(context)
         val target = File(root, id)
-        check(target.canonicalPath.startsWith(root.canonicalPath + File.separator)) { "Invalid application path" }
+        check(target.canonicalPath.startsWith(root.canonicalPath + File.separator)) {
+            "Invalid application path"
+        }
         check(target.isDirectory) { "Application is not installed" }
         check(target.deleteRecursively()) { "Unable to remove application" }
     }
@@ -51,19 +60,26 @@ object WebAppInstaller {
             check(id != "store") { "Reserved application id" }
             val iconPath = manifest.optString("icon").takeIf(String::isNotBlank)
             if (iconPath != null) {
-                check(!iconPath.startsWith('/') && !iconPath.contains("..") && iconPath.endsWith(".png", ignoreCase = true)) {
+                check(
+                    !iconPath.startsWith('/') &&
+                        !iconPath.contains("..") &&
+                        iconPath.endsWith(".png", ignoreCase = true)
+                ) {
                     "The application icon must be a relative PNG path"
                 }
                 val icon = File(packageRoot, iconPath)
-                check(icon.isFile && icon.length() <= 512 * 1024) { "Application icon is missing or too large" }
+                check(icon.isFile && icon.length() <= 512 * 1024) {
+                    "Application icon is missing or too large"
+                }
             }
             val permissionsJson = manifest.optJSONArray("permissions")
             val declaredPermissions = mutableSetOf<String>()
-            if (permissionsJson != null) for (index in 0 until permissionsJson.length()) {
-                val permission = permissionsJson.getString(index)
-                check(permission in knownCapabilities) { "Unknown capability" }
-                declaredPermissions += permission
-            }
+            if (permissionsJson != null)
+                for (index in 0 until permissionsJson.length()) {
+                    val permission = permissionsJson.getString(index)
+                    check(permission in knownCapabilities) { "Unknown capability" }
+                    declaredPermissions += permission
+                }
             validateExpected(Installed(id, name, version, declaredPermissions), expected)
 
             val root = WebAppRegistry.installedRoot(context)
@@ -80,11 +96,20 @@ object WebAppInstaller {
     internal fun validateExpected(installed: Installed, expected: Expected?) {
         if (expected == null) return
         check(installed.id == expected.id) { "Package application id does not match the catalog" }
-        check(installed.version == expected.version) { "Package version does not match the catalog" }
-        check(installed.permissions == expected.permissions) { "Package capabilities do not match the catalog" }
+        check(installed.version == expected.version) {
+            "Package version does not match the catalog"
+        }
+        check(installed.permissions == expected.permissions) {
+            "Package capabilities do not match the catalog"
+        }
     }
 
-    internal fun activate(packageRoot: File, target: File, backup: File, move: (File, File) -> Boolean = { from, to -> from.renameTo(to) }) {
+    internal fun activate(
+        packageRoot: File,
+        target: File,
+        backup: File,
+        move: (File, File) -> Boolean = { from, to -> from.renameTo(to) },
+    ) {
         if (backup.exists()) backup.deleteRecursively()
         if (target.exists()) check(move(target, backup)) { "Unable to update application" }
         try {
@@ -101,16 +126,21 @@ object WebAppInstaller {
         val store = URI(BuildConfig.STORE_URL)
         check(requested.scheme in setOf("http", "https")) { "Unsupported package URL" }
         check(requested.userInfo == null && requested.fragment == null) { "Invalid package URL" }
-        check(requested.scheme == store.scheme && requested.host == store.host && effectivePort(requested) == effectivePort(store)) {
+        check(
+            requested.scheme == store.scheme &&
+                requested.host == store.host &&
+                effectivePort(requested) == effectivePort(store)
+        ) {
             "Package must come from the configured store"
         }
     }
 
-    private fun effectivePort(uri: URI): Int = when {
-        uri.port >= 0 -> uri.port
-        uri.scheme == "https" -> 443
-        else -> 80
-    }
+    private fun effectivePort(uri: URI): Int =
+        when {
+            uri.port >= 0 -> uri.port
+            uri.scheme == "https" -> 443
+            else -> 80
+        }
 
     private fun downloadAndExtract(packageUrl: String, destination: File) {
         val connection = URL(packageUrl).openConnection() as HttpURLConnection
@@ -119,7 +149,9 @@ object WebAppInstaller {
         connection.instanceFollowRedirects = false
         connection.setRequestProperty("Accept", "application/zip")
         try {
-            check(connection.responseCode == HttpURLConnection.HTTP_OK) { "Store returned HTTP ${connection.responseCode}" }
+            check(connection.responseCode == HttpURLConnection.HTTP_OK) {
+                "Store returned HTTP ${connection.responseCode}"
+            }
             val declaredSize = connection.contentLengthLong
             check(declaredSize < 0 || declaredSize <= MAX_PACKAGE_BYTES) { "Package is too large" }
             ZipInputStream(BufferedInputStream(connection.inputStream)).use { zip ->
@@ -129,12 +161,20 @@ object WebAppInstaller {
                     val entry = zip.nextEntry ?: break
                     check(++entryCount <= MAX_ENTRIES) { "Package contains too many files" }
                     val output = File(destination, entry.name)
-                    check(output.canonicalPath.startsWith(destination.canonicalPath + File.separator)) { "Invalid package path" }
+                    check(
+                        output.canonicalPath.startsWith(destination.canonicalPath + File.separator)
+                    ) {
+                        "Invalid package path"
+                    }
                     if (entry.isDirectory) {
-                        check(output.isDirectory || output.mkdirs()) { "Unable to create package directory" }
+                        check(output.isDirectory || output.mkdirs()) {
+                            "Unable to create package directory"
+                        }
                     } else {
                         val parent = output.parentFile
-                        check(parent == null || parent.isDirectory || parent.mkdirs()) { "Unable to create package directory" }
+                        check(parent == null || parent.isDirectory || parent.mkdirs()) {
+                            "Unable to create package directory"
+                        }
                         FileOutputStream(output).use { file ->
                             val buffer = ByteArray(8192)
                             var entryBytes = 0L
@@ -143,7 +183,11 @@ object WebAppInstaller {
                                 if (count < 0) break
                                 entryBytes += count
                                 totalBytes += count
-                                check(entryBytes <= MAX_ENTRY_BYTES && totalBytes <= MAX_PACKAGE_BYTES) { "Package is too large" }
+                                check(
+                                    entryBytes <= MAX_ENTRY_BYTES && totalBytes <= MAX_PACKAGE_BYTES
+                                ) {
+                                    "Package is too large"
+                                }
                                 file.write(buffer, 0, count)
                             }
                         }
@@ -159,7 +203,9 @@ object WebAppInstaller {
     private fun findPackageRoot(staging: File): File {
         if (File(staging, "manifest.json").isFile) return staging
         val children = staging.listFiles().orEmpty()
-        check(children.size == 1 && children[0].isDirectory) { "Package must contain one application" }
+        check(children.size == 1 && children[0].isDirectory) {
+            "Package must contain one application"
+        }
         return children[0]
     }
 }

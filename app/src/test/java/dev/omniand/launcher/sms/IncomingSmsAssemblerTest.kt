@@ -5,15 +5,20 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class IncomingSmsAssemblerTest {
-    @Test fun emptyBroadcastIsIgnored() {
+    @Test
+    fun emptyBroadcastIsIgnored() {
         assertNull(IncomingSmsAssembler.assemble(emptyList()))
     }
 
-    @Test fun multipartBroadcastBecomesOneMessage() {
-        val result = IncomingSmsAssembler.assemble(listOf(
-            IncomingPart("+331", "hello ", 20, 3),
-            IncomingPart("+331", "world", 21, 3)
-        ))!!
+    @Test
+    fun multipartBroadcastBecomesOneMessage() {
+        val result =
+            IncomingSmsAssembler.assemble(
+                listOf(
+                    IncomingPart("+331", "hello ", 20, 3),
+                    IncomingPart("+331", "world", 21, 3),
+                )
+            )!!
         assertEquals("+331", result.address)
         assertEquals("hello world", result.body)
         assertEquals(20, result.timestamp)

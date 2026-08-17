@@ -15,5 +15,7 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "OmniAnd"
+
 include(":app")
+
 include(":wrappers:template")

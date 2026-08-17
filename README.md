@@ -19,7 +19,12 @@ For desktop access, wildcard DNS must point the canonical hostnames at the phone
 | `test.phone.example.org` | Permission test | None |
 | `store.phone.example.org` | Store manager | `apps.install` |
 
-Only the Store is embedded in the Platform APK. Messages, Permission test, and every other application live in `../omniAndStore/` and appear on the Platform Home only after Store installation. Store-installed ZIP packages are stored by OmniAnd and served from their own origins. Web installation works for both phone and desktop use.
+The canonical Platform Home Web source lives in `../omniAndStore/platform/shell/`, and the built-in
+Store source lives in `../omniAndStore/apps/store/`. The Android build copies both into generated APK
+assets, keeping HTML, CSS, and JavaScript out of the Platform source tree. The Store remains a
+built-in app and is not emitted as a catalog ZIP. Messages, Permission test, and every other
+application live in `../omniAndStore/` and appear on the Platform Home only after Store
+installation. Store-installed ZIP packages are stored by OmniAnd and served from their own origins.
 
 Every installed Web app supports optional Android integration. On Android, **Add to Android** makes OmniAnd generate and sign a tiny wrapper APK on demand, then launches the system package installer. The wrapper gets a stable package name derived from the app ID plus the manifest's label and app ID. It contains no Web application files or capabilities and delegates to OmniAnd's generic `WebAppActivity`. Android may first require permission for OmniAnd to install unknown apps.
 
@@ -40,12 +45,27 @@ Open **OmniAnd** from the user's normal Android launcher. Installing an applicat
 
 The development Store URL is configured with `STORE_URL` in `app/build.gradle.kts`. Its current HTTP value is intended only for trusted local development. Use HTTPS for desktop embedding and production-like testing.
 
+## Formatting
+
+Spotless pins the repository formatters and applies the shared UTF-8, LF, final-newline, and
+100-column conventions. Kotlin and Gradle Kotlin scripts use ktfmt's Kotlin style, and wrapper Java
+uses google-java-format's AOSP style. Web sources use Prettier 3.9.6 in `../omniAndStore` before
+Gradle copies them into generated assets.
+
+```sh
+./gradlew spotlessApply
+./gradlew spotlessCheck
+```
+
+`spotlessCheck` is also part of each Android module's normal `check` lifecycle. Generated build
+outputs and the generated wrapper APK assets are outside the formatter targets.
+
 ## Validation
 
 ```sh
-node --check app/src/main/assets/web/shell/app.js
-node --check app/src/main/assets/web/apps/store/app.js
-./gradlew assembleDebug
+node --check ../omniAndStore/platform/shell/app.js
+node --check ../omniAndStore/apps/store/app.js
+./gradlew spotlessCheck :app:testDebugUnitTest assembleDebug
 ```
 
 On a device, verify that the normal launcher starts OmniAnd; Messages can read, receive, send, update, and delete SMS when the required Android role and permissions are granted; and Permission test receives `403 Forbidden`. Disable networking and confirm Android still loads all canonical platform origins. For desktop testing, configure wildcard DNS and trusted TLS termination before opening `https://phone.example.org/`.

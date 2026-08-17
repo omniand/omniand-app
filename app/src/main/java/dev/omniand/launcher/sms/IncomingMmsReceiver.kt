@@ -29,9 +29,13 @@ class IncomingMmsReceiver : BroadcastReceiver() {
                 }
                 check(temporary.renameTo(target))
                 SmsNotifications.publishMmsUnsupported(context, System.currentTimeMillis())
-            } finally { pending.finish() }
+            } finally {
+                pending.finish()
+            }
         }
     }
 
-    companion object { private val EXECUTOR = Executors.newSingleThreadExecutor() }
+    companion object {
+        private val EXECUTOR = Executors.newSingleThreadExecutor()
+    }
 }

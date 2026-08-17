@@ -1,11 +1,11 @@
 package dev.omniand.launcher.sms
 
-import org.json.JSONObject
 import java.io.InputStream
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import org.json.JSONObject
 
 /** Process-local invalidations for SMS views. Events are deliberately not replayed. */
 object SmsEventBroadcaster {
@@ -13,30 +13,34 @@ object SmsEventBroadcaster {
 
     fun subscribe(heartbeatMillis: Long = 15_000, closeAfterEvent: Boolean = false): Subscription =
         Subscription(heartbeatMillis, closeAfterEvent) {
-            subscribers.remove(it)
-        }.also {
-            subscribers.add(it)
-        }
+                subscribers.remove(it)
+            }
+            .also {
+                subscribers.add(it)
+            }
 
     fun publish(reason: String, messageId: String) {
         require(reason == "incoming" || reason == "delivery" || reason == "read")
-        val frame = "event: sms-change\ndata: ${JSONObject().put("reason", reason).put("messageId", messageId)}\n\n"
-            .toByteArray(Charsets.UTF_8)
+        val frame =
+            "event: sms-change\ndata: ${JSONObject().put("reason", reason).put("messageId", messageId)}\n\n"
+                .toByteArray(Charsets.UTF_8)
         subscribers.forEach { it.offer(frame) }
     }
 
     fun publishThreadRead(threadId: String) {
-        val frame = "event: sms-change\ndata: ${JSONObject().put("reason", "read").put("threadId", threadId)}\n\n"
-            .toByteArray(Charsets.UTF_8)
+        val frame =
+            "event: sms-change\ndata: ${JSONObject().put("reason", "read").put("threadId", threadId)}\n\n"
+                .toByteArray(Charsets.UTF_8)
         subscribers.forEach { it.offer(frame) }
     }
 
     internal fun subscriberCount(): Int = subscribers.size
 
-    class Subscription internal constructor(
+    class Subscription
+    internal constructor(
         private val heartbeatMillis: Long,
         private val closeAfterEvent: Boolean,
-        private val onClose: (Subscription) -> Unit
+        private val onClose: (Subscription) -> Unit,
     ) : InputStream() {
         private val queue = ArrayBlockingQueue<ByteArray>(1)
         private val closed = AtomicBoolean(false)
@@ -65,6 +69,9 @@ object SmsEventBroadcaster {
         override fun read(target: ByteArray, targetOffset: Int, length: Int): Int {
             if (length == 0) return 0
             while (offset >= current.size) {
+                // Locally intercepted WebResourceResponse streams are buffered by Android
+                // WebView. Ending after one invalidation lets EventSource deliver it and reconnect;
+                // desktop HTTP subscriptions remain persistent and receive heartbeats.
                 if (closeAfterEvent && eventDelivered) {
                     close()
                     return -1
@@ -101,5 +108,6 @@ object SmsIncomingEventPublisher {
 
 object SmsReadEventPublisher {
     fun publishMessage(messageId: String) = SmsEventBroadcaster.publish("read", messageId)
+
     fun publishThread(threadId: String) = SmsEventBroadcaster.publishThreadRead(threadId)
 }

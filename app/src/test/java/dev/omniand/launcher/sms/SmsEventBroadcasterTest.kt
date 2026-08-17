@@ -6,7 +6,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SmsEventBroadcasterTest {
-    @Test fun `subscription starts with retry framing and cleans up`() {
+    @Test
+    fun `subscription starts with retry framing and cleans up`() {
         val stream = SmsEventBroadcaster.subscribe(10)
         assertEquals(1, SmsEventBroadcaster.subscriberCount())
         assertEquals(": connected\nretry: 3000\n\n", readFrame(stream))
@@ -14,7 +15,8 @@ class SmsEventBroadcasterTest {
         assertEquals(0, SmsEventBroadcaster.subscriberCount())
     }
 
-    @Test fun `delivery is bounded and conflates to newest invalidation`() {
+    @Test
+    fun `delivery is bounded and conflates to newest invalidation`() {
         val stream = SmsEventBroadcaster.subscribe(10)
         readFrame(stream)
         SmsEventBroadcaster.publish("incoming", "1")
@@ -27,14 +29,16 @@ class SmsEventBroadcasterTest {
         stream.close()
     }
 
-    @Test fun `idle subscriptions emit heartbeats`() {
+    @Test
+    fun `idle subscriptions emit heartbeats`() {
         val stream = SmsEventBroadcaster.subscribe(1)
         readFrame(stream)
         assertEquals(": heartbeat\n\n", readFrame(stream))
         stream.close()
     }
 
-    @Test fun `android web resource bulk reads receive frames immediately`() {
+    @Test
+    fun `android web resource bulk reads receive frames immediately`() {
         val stream = SmsEventBroadcaster.subscribe(10, closeAfterEvent = true)
         val buffer = ByteArray(256)
         val initialCount = stream.read(buffer)
@@ -46,7 +50,8 @@ class SmsEventBroadcasterTest {
         assertEquals(0, SmsEventBroadcaster.subscriberCount())
     }
 
-    @Test fun `only final send outcomes publish`() {
+    @Test
+    fun `only final send outcomes publish`() {
         val stream = SmsEventBroadcaster.subscribe(5)
         readFrame(stream)
         SmsSendEventPublisher.publishFinal(SmsSendOutcome.PENDING, "1")
@@ -57,7 +62,8 @@ class SmsEventBroadcasterTest {
         stream.close()
     }
 
-    @Test fun `persisted incoming messages publish their provider identifier`() {
+    @Test
+    fun `persisted incoming messages publish their provider identifier`() {
         val stream = SmsEventBroadcaster.subscribe(5)
         readFrame(stream)
         SmsIncomingEventPublisher.publishPersisted("42")
@@ -67,7 +73,8 @@ class SmsEventBroadcasterTest {
         stream.close()
     }
 
-    @Test fun `read changes identify their message or thread`() {
+    @Test
+    fun `read changes identify their message or thread`() {
         val messageStream = SmsEventBroadcaster.subscribe(5)
         readFrame(messageStream)
         SmsReadEventPublisher.publishMessage("42")

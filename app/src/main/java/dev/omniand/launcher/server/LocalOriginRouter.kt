@@ -18,9 +18,18 @@ object LocalOriginRouter {
         val uri = request.url
         if (!isPlatformOrigin(uri)) return null
         val host = uri.host ?: return null
-        val path = uri.encodedPath.orEmpty().ifEmpty { "/" } +
-            uri.encodedQuery?.let { "?$it" }.orEmpty()
-        val response = PlatformServer.localResponse(context, request.method, path, host, request.requestHeaders)
+        val path =
+            uri.encodedPath.orEmpty().ifEmpty { "/" } + uri.encodedQuery?.let { "?$it" }.orEmpty()
+        // Preserve the canonical hostname when entering PlatformServer: its leading label is the
+        // Web-app identity and therefore the boundary used for capability authorization.
+        val response =
+            PlatformServer.localResponse(
+                context,
+                request.method,
+                path,
+                host,
+                request.requestHeaders,
+            )
         val contentType = response.contentType.substringBefore(';')
         val encoding = response.contentType.substringAfter("charset=", "utf-8")
         return WebResourceResponse(
@@ -29,7 +38,7 @@ object LocalOriginRouter {
             response.statusCode,
             response.reason,
             response.headers,
-            response.openBody()
+            response.openBody(),
         )
     }
 }

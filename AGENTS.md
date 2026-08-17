@@ -38,16 +38,19 @@ app/src/main/
 │       └── WebAppRegistry.kt
 │   └── wrappers/
 │       └── WrapperInstaller.kt
-└── assets/web/
-    ├── shell/
-    │   ├── index.html
-    │   ├── app.js
-    │   └── style.css
-    └── apps/
-        └── store/
 ```
 
-The Web files live under Android assets so Gradle packages them into the APK. The HTTP server reads and serves those assets; the WebView must not load them with `file://` URLs.
+```text
+app/build/generated/embeddedWebAssets/
+└── web/                          # copied from ../omniAndStore at build time
+    ├── shell/
+    └── apps/store/
+```
+
+The canonical Web files live in `../omniAndStore/platform/shell/` and
+`../omniAndStore/apps/store/`. Gradle copies them into generated Android assets and packages them
+into the APK. The HTTP server reads and serves those assets; the WebView must not load them with
+`file://` URLs.
 
 The `wrappers/template/` Gradle application module is the generic Android-integration template. It must not contain any Web package or app-specific native logic. The Platform embeds it, rewrites its binary manifest for an installed app, signs it with the Android-Keystore wrapper key, and hands the generated APK to Android's package installer.
 
@@ -79,7 +82,8 @@ Do not replace this with path-based isolation. Paths on one host and port share 
 
 ## Adding a Web app
 
-1. Create the application only under `../omniAndStore/apps/<app-id>/`; never add catalog apps to Platform assets.
+1. Create the application only under `../omniAndStore/apps/<app-id>/`; never add catalog apps to
+   Platform assets. `apps/store/` is the special built-in Store and is excluded from catalog ZIPs.
 2. Add a small `manifest.json`, `index.html`, JavaScript, optional CSS, and a PNG icon referenced by `"icon": "icon.png"`.
 3. Add the application to the Store catalog and regenerate its ZIP; installed packages are discovered from their manifests and the ID becomes the hostname label.
 4. Ensure its permissions are understood by `WebAppInstaller` and its generated CSP is restrictive.
