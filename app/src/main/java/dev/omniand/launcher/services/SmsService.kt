@@ -42,10 +42,28 @@ data class SmsThread(
     val body: String,
     val timestamp: Long,
     val unreadCount: Int,
+    val unreadCountCapped: Boolean,
     val lastMessageDelivery: SmsDelivery,
 )
 
 object SmsMapper {
+    data class Page(val offset: Int, val limit: Int, val paged: Boolean)
+
+    data class Unread(val count: Int, val capped: Boolean)
+
+    fun unread(total: Int) = Unread(total.coerceAtMost(9), total >= 10)
+
+    fun page(rawOffset: String?, rawLimit: String?, defaultLimit: Int): Page {
+        if (rawOffset == null && rawLimit == null) return Page(0, 100, false)
+        val offset =
+            if (rawOffset == null) 0 else rawOffset.toIntOrNull() ?: throw SmsService.InvalidInput()
+        val limit =
+            if (rawLimit == null) defaultLimit
+            else rawLimit.toIntOrNull() ?: throw SmsService.InvalidInput()
+        if (offset < 0 || limit !in 1..100) throw SmsService.InvalidInput()
+        return Page(offset, limit, true)
+    }
+
     fun delivery(providerType: Int): SmsDelivery? =
         when (providerType) {
             Telephony.Sms.MESSAGE_TYPE_INBOX -> SmsDelivery.RECEIVED
@@ -68,6 +86,7 @@ object SmsMapper {
                     body = latest.body,
                     timestamp = latest.timestamp,
                     unreadCount = messages.count { it.delivery.incoming && !it.read },
+                    unreadCountCapped = false,
                     lastMessageDelivery = latest.delivery,
                 )
             }
@@ -102,30 +121,40 @@ class SmsService(private val context: Context) {
 
     fun recent(limit: Int = 100): JSONArray = JSONArray(records().take(limit).map(::legacyJson))
 
-    fun threads(): JSONArray =
-        JSONArray(
-            SmsMapper.threads(records()).map { thread ->
-                JSONObject()
-                    .put("id", thread.id)
-                    .put("participants", JSONArray().put(thread.participant))
-                    .put("body", thread.body)
-                    .put("timestamp", thread.timestamp)
-                    .put("unreadCount", thread.unreadCount)
-                    .put("lastMessageType", "sms")
-                    .put("lastMessageDelivery", thread.lastMessageDelivery.apiValue)
-            }
-        )
+    fun threads(rawOffset: String?, rawLimit: String?): Any {
+        val page = SmsMapper.page(rawOffset, rawLimit, 30)
+        val rows = threadRecords(page.offset, page.limit + 1)
+        val values = JSONArray(rows.take(page.limit).map(::threadJson))
+        return if (!page.paged) values
+        else
+            JSONObject()
+                .put("threads", values)
+                .put(
+                    "nextOffset",
+                    if (rows.size > page.limit) page.offset + page.limit else JSONObject.NULL,
+                )
+    }
 
-    fun messages(rawThreadId: String): JSONArray {
+    fun messages(rawThreadId: String, rawOffset: String?, rawLimit: String?): Any {
         val threadId = SmsMapper.requireId(rawThreadId)
-        val messages = SmsMapper.messages(records(), threadId)
-        if (messages.isEmpty()) throw NotFound()
-        return JSONArray(messages.map(::messageJson))
+        val page = SmsMapper.page(rawOffset, rawLimit, 50)
+        val rows = records(page.limit + 1, page.offset, threadId)
+        val messages = rows.take(page.limit).reversed()
+        if (messages.isEmpty() && page.offset == 0) throw NotFound()
+        val values = JSONArray(messages.map(::messageJson))
+        return if (!page.paged) values
+        else
+            JSONObject()
+                .put("messages", values)
+                .put(
+                    "nextOffset",
+                    if (rows.size > page.limit) page.offset + page.limit else JSONObject.NULL,
+                )
     }
 
     fun message(rawMessageId: String): JSONObject {
         val messageId = SmsMapper.requireId(rawMessageId)
-        return records().firstOrNull { it.id == messageId }?.let(::messageJson) ?: throw NotFound()
+        return recordById(messageId)?.let(::messageJson) ?: throw NotFound()
     }
 
     @Suppress("DEPRECATION")
@@ -247,7 +276,13 @@ class SmsService(private val context: Context) {
         return JSONObject().put("deleted", true).put("threadId", threadId).put("count", changed)
     }
 
-    private fun records(): List<SmsRecord> {
+    /** Reads a bounded provider page, newest first, optionally restricted to one conversation. */
+    private fun records(
+        limit: Int = 100,
+        offset: Int = 0,
+        threadId: String? = null,
+        messageId: String? = null,
+    ): List<SmsRecord> {
         requirePermission(Manifest.permission.READ_SMS)
         val result = mutableListOf<SmsRecord>()
         val projection =
@@ -264,9 +299,13 @@ class SmsService(private val context: Context) {
             .query(
                 Telephony.Sms.CONTENT_URI,
                 projection,
-                null,
-                null,
-                "${Telephony.Sms.DATE} DESC",
+                when {
+                    messageId != null -> "${Telephony.Sms._ID} = ?"
+                    threadId != null -> "${Telephony.Sms.THREAD_ID} = ?"
+                    else -> null
+                },
+                (messageId ?: threadId)?.let { arrayOf(it) },
+                "${Telephony.Sms.DATE} DESC, ${Telephony.Sms._ID} DESC LIMIT $limit OFFSET $offset",
             )
             ?.use { cursor ->
                 val id = cursor.getColumnIndexOrThrow(Telephony.Sms._ID)
@@ -293,6 +332,56 @@ class SmsService(private val context: Context) {
         return result
     }
 
+    /** Reads a bounded conversation page and enriches only those threads with SMS provider data. */
+    private fun threadRecords(offset: Int, limit: Int): List<SmsThread> {
+        requirePermission(Manifest.permission.READ_SMS)
+        val result = mutableListOf<SmsThread>()
+        context.contentResolver
+            .query(
+                Telephony.Threads.CONTENT_URI.buildUpon()
+                    .appendQueryParameter("simple", "true")
+                    .build(),
+                arrayOf(Telephony.Threads._ID, Telephony.Threads.DATE),
+                null,
+                null,
+                "${Telephony.Threads.DATE} DESC, ${Telephony.Threads._ID} DESC",
+            )
+            ?.use { cursor ->
+                if (offset > 0) cursor.moveToPosition(offset - 1)
+                while (result.size < limit && cursor.moveToNext()) {
+                    val threadId = cursor.getString(0)
+                    val latest = records(1, 0, threadId).firstOrNull() ?: continue
+                    val unread = SmsMapper.unread(unreadCount(threadId))
+                    result +=
+                        SmsThread(
+                            threadId,
+                            latest.address,
+                            latest.body,
+                            latest.timestamp,
+                            unread.count,
+                            unread.capped,
+                            latest.delivery,
+                        )
+                }
+            }
+        return result
+    }
+
+    private fun unreadCount(threadId: String): Int =
+        context.contentResolver
+            .query(
+                Telephony.Sms.CONTENT_URI,
+                arrayOf(Telephony.Sms._ID),
+                "${Telephony.Sms.THREAD_ID} = ? AND ${Telephony.Sms.TYPE} = ? AND ${Telephony.Sms.READ} = 0",
+                arrayOf(threadId, Telephony.Sms.MESSAGE_TYPE_INBOX.toString()),
+                "${Telephony.Sms.DATE} DESC LIMIT 10",
+            )
+            ?.use { cursor ->
+                var count = 0
+                while (cursor.moveToNext()) count += 1
+                count
+            } ?: 0
+
     private fun threadForMessage(messageId: String): String =
         context.contentResolver
             .query(
@@ -303,6 +392,11 @@ class SmsService(private val context: Context) {
                 null,
             )
             ?.use { if (it.moveToFirst()) it.getString(0) else null } ?: throw NotFound()
+
+    private fun recordById(messageId: String): SmsRecord? {
+        requirePermission(Manifest.permission.READ_SMS)
+        return records(1, messageId = messageId).firstOrNull()
+    }
 
     private fun requirePermission(permission: String) {
         if (context.checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED)
@@ -340,6 +434,17 @@ class SmsService(private val context: Context) {
             .put("timestamp", message.timestamp)
             .put("read", message.read)
             .put("delivery", message.delivery.apiValue)
+
+    private fun threadJson(thread: SmsThread) =
+        JSONObject()
+            .put("id", thread.id)
+            .put("participants", JSONArray().put(thread.participant))
+            .put("body", thread.body)
+            .put("timestamp", thread.timestamp)
+            .put("unreadCount", thread.unreadCount)
+            .put("unreadCountCapped", thread.unreadCountCapped)
+            .put("lastMessageType", "sms")
+            .put("lastMessageDelivery", thread.lastMessageDelivery.apiValue)
 
     private companion object {
         const val WRITE_SMS_PERMISSION = "android.permission.WRITE_SMS"

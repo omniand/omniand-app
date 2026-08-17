@@ -24,6 +24,7 @@ class SmsMapperTest {
         assertEquals(1, threads[0].unreadCount)
         assertEquals(2, threads[1].unreadCount)
         assertEquals(0, threads[2].unreadCount)
+        assertTrue(threads.none { it.unreadCountCapped })
         assertEquals(SmsDelivery.FAILED, threads[0].lastMessageDelivery)
     }
 
@@ -56,5 +57,24 @@ class SmsMapperTest {
     @Test
     fun missingThreadProducesNoRecordsForServiceToMapTo404() {
         assertTrue(SmsMapper.messages(records, "999").isEmpty())
+    }
+
+    @Test
+    fun validatesPaginationAndPreservesLegacyCap() {
+        assertEquals(SmsMapper.Page(0, 100, false), SmsMapper.page(null, null, 30))
+        assertEquals(SmsMapper.Page(0, 30, true), SmsMapper.page("0", null, 30))
+        assertEquals(SmsMapper.Page(12, 50, true), SmsMapper.page("12", "50", 30))
+        for ((offset, limit) in
+            listOf("-1" to "2", "x" to "2", "0" to "0", "0" to "101")) assertThrows(
+            SmsService.InvalidInput::class.java
+        ) {
+            SmsMapper.page(offset, limit, 30)
+        }
+    }
+
+    @Test
+    fun capsUnreadDisplayOnlyWhenTenthRowExists() {
+        assertEquals(SmsMapper.Unread(9, false), SmsMapper.unread(9))
+        assertEquals(SmsMapper.Unread(9, true), SmsMapper.unread(10))
     }
 }

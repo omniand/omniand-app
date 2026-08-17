@@ -308,7 +308,8 @@ object PlatformServer {
                 mapOf("Cache-Control" to "no-cache, no-transform", "X-Accel-Buffering" to "no"),
             )
         }
-        if (path == "/api/sms/threads" && method == "GET") return sms(context, app) { it.threads() }
+        if (path == "/api/sms/threads" && method == "GET")
+            return sms(context, app) { it.threads(query["offset"], query["limit"]) }
         if (path == "/api/sms/messages" && method == "POST") {
             return smsMutation(context, app, "sms.send") {
                 it.send(
@@ -319,7 +320,9 @@ object PlatformServer {
         }
         val threadMessages = Regex("^/api/sms/threads/([^/]+)/messages$").matchEntire(path)
         if (threadMessages != null && method == "GET") {
-            return sms(context, app) { it.messages(threadMessages.groupValues[1]) }
+            return sms(context, app) {
+                it.messages(threadMessages.groupValues[1], query["offset"], query["limit"])
+            }
         }
         val thread = Regex("^/api/sms/threads/([^/]+)$").matchEntire(path)
         if (thread != null && method == "DELETE") {
@@ -717,6 +720,8 @@ object PlatformServer {
             )
         } catch (_: SmsService.InvalidId) {
             error(400, "Invalid SMS identifier")
+        } catch (_: SmsService.InvalidInput) {
+            error(400, "Invalid SMS pagination")
         } catch (_: SmsService.NotFound) {
             error(404, "SMS resource not found")
         } catch (_: Exception) {
