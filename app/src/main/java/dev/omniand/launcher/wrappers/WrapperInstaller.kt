@@ -48,6 +48,9 @@ object WrapperInstaller {
         "OMNIAND_PLATFORM_CERT_PLACEHOLDER_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
     private const val TEMPLATE_VERSION_NAME =
         "OMNIAND_VERSION_NAME_PLACEHOLDER_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+    private const val TEMPLATE_STARTUP_AUTHORITY = "$TEMPLATE_PACKAGE.androidx-startup"
+    private const val TEMPLATE_DYNAMIC_PERMISSION =
+        "$TEMPLATE_PACKAGE.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
     private const val KEY_ALIAS = "omniand-generated-wrappers"
 
     data class State(val supported: Boolean, val installed: Boolean)
@@ -230,6 +233,17 @@ object WrapperInstaller {
     private fun patchManifest(context: Context, manifest: ByteArray, app: WebApp): ByteArray =
         manifest.copyOf().also { output ->
             replaceBinaryXmlString(output, TEMPLATE_PACKAGE, packageName(app.id))
+            replaceBinaryXmlString(
+                output,
+                TEMPLATE_STARTUP_AUTHORITY,
+                "${packageName(app.id)}.androidx-startup",
+            )
+            // Both manifest attributes reference one deduplicated string-pool entry.
+            replaceBinaryXmlString(
+                output,
+                TEMPLATE_DYNAMIC_PERMISSION,
+                "${packageName(app.id)}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+            )
             replaceBinaryXmlString(output, TEMPLATE_LABEL, app.name.take(80))
             replaceBinaryXmlString(output, TEMPLATE_APP_ID, app.id)
             replaceBinaryXmlString(output, TEMPLATE_VERSION_NAME, app.version.take(80))

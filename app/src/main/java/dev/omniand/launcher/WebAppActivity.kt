@@ -17,9 +17,11 @@ import android.webkit.WebViewClient
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
+import dev.omniand.launcher.contacts.ContactsSetupManager
 import dev.omniand.launcher.server.LocalOriginRouter
 import dev.omniand.launcher.server.PlatformServer
 import dev.omniand.launcher.sms.SmsNotifications
+import dev.omniand.launcher.sms.SmsSetupManager
 import dev.omniand.launcher.webapps.WebAppRegistry
 
 class WebAppActivity : Activity() {
@@ -196,7 +198,10 @@ class WebAppActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        if (currentAppId == "store") isStoreActive = true
+        if (currentAppId == "store") {
+            isStoreActive = true
+            if (!ContactsSetupManager.openPendingSetup(this)) SmsSetupManager.openPendingSetup(this)
+        }
     }
 
     override fun onPause() {
