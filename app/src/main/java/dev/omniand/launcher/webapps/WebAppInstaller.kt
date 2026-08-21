@@ -29,19 +29,21 @@ object WebAppInstaller {
 
     data class Expected(val id: String, val version: String, val permissions: Set<String>)
 
-    fun uninstall(context: Context, id: String) {
-        check(validId.matches(id)) { "Invalid application id" }
-        check(id != "store") { "The system Store cannot be removed" }
-        val root = WebAppRegistry.installedRoot(context)
-        val target = File(root, id)
-        check(target.canonicalPath.startsWith(root.canonicalPath + File.separator)) {
-            "Invalid application path"
+    data class ValidatedPackage(val metadata: Installed, val root: File, val staging: File) :
+        AutoCloseable {
+        override fun close() {
+            staging.deleteRecursively()
         }
-        check(target.isDirectory) { "Application is not installed" }
-        check(target.deleteRecursively()) { "Unable to remove application" }
     }
 
-    fun install(context: Context, packageUrl: String, expected: Expected? = null): Installed {
+    /**
+     * Downloads and validates a package without making it active. The caller owns the staging dir.
+     */
+    fun prepare(
+        context: Context,
+        packageUrl: String,
+        expected: Expected? = null,
+    ): ValidatedPackage {
         requireAllowedOrigin(packageUrl)
         val staging = File(context.cacheDir, "webapp-${UUID.randomUUID()}")
         check(staging.mkdirs()) { "Unable to prepare installation" }
@@ -82,14 +84,11 @@ object WebAppInstaller {
                 }
             validateExpected(Installed(id, name, version, declaredPermissions), expected)
 
-            val root = WebAppRegistry.installedRoot(context)
-            check(root.exists() || root.mkdirs()) { "Unable to access application storage" }
-            val target = File(root, id)
-            val backup = File(root, ".$id.backup")
-            activate(packageRoot, target, backup)
-            return Installed(id, name, version, declaredPermissions)
-        } finally {
+            val metadata = Installed(id, name, version, declaredPermissions)
+            return ValidatedPackage(metadata, packageRoot, staging)
+        } catch (error: Exception) {
             staging.deleteRecursively()
+            throw error
         }
     }
 

@@ -1,18 +1,20 @@
 package dev.omniand.launcher.wrappers
 
 import android.Manifest
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import androidx.core.content.FileProvider
 import com.android.apksig.ApkSigner
 import com.android.apksig.KeyConfig
 import dev.omniand.launcher.webapps.WebApp
+import dev.omniand.launcher.webapps.WebAppInstaller
 import java.io.File
 import java.io.FileOutputStream
 import java.math.BigInteger
@@ -29,11 +31,11 @@ import java.util.zip.ZipOutputStream
 import org.json.JSONObject
 
 /**
- * Produces optional Android launcher wrappers from the generic packaged template.
+ * Produces asset-bearing Android application wrappers from the generic packaged template.
  *
  * Generation rewrites only fixed-width binary-manifest placeholders and the icon, then signs the
- * result with the non-exportable per-installation Android-Keystore key. Web packages and their
- * capabilities remain owned by the Platform and are never copied into a wrapper.
+ * result with the non-exportable per-installation Android-Keystore key. Validated Web files are
+ * copied under assets/webapp and are later served by OmniAnd without loading wrapper code.
  */
 object WrapperInstaller {
     private const val TEMPLATE_PACKAGE =
@@ -44,6 +46,8 @@ object WrapperInstaller {
         "OMNIAND_APP_ID_PLACEHOLDER_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
     private const val TEMPLATE_PLATFORM_CERT =
         "OMNIAND_PLATFORM_CERT_PLACEHOLDER_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+    private const val TEMPLATE_VERSION_NAME =
+        "OMNIAND_VERSION_NAME_PLACEHOLDER_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
     private const val KEY_ALIAS = "omniand-generated-wrappers"
 
     data class State(val supported: Boolean, val installed: Boolean)
@@ -101,36 +105,75 @@ object WrapperInstaller {
         return State(supported = true, installed = installed)
     }
 
-    fun install(context: Context, app: WebApp): String {
+    fun install(context: Context, validated: WebAppInstaller.ValidatedPackage): JSONObject {
         if (!context.packageManager.canRequestPackageInstalls()) {
-            context.startActivity(
-                Intent(
-                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                        Uri.parse("package:${context.packageName}"),
-                    )
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-            return "permission-required"
+            openUnknownSourcesSettings(context)
+            error("Allow OmniAnd to install unknown applications in Android settings")
         }
+        val metadata = validated.metadata
+        val app =
+            WebApp(
+                metadata.id,
+                metadata.name,
+                metadata.version,
+                metadata.permissions,
+                iconPath =
+                    JSONObject(File(validated.root, "manifest.json").readText())
+                        .optString("icon")
+                        .takeIf(String::isNotBlank),
+            )
 
         val directory = File(context.cacheDir, "wrappers")
         check(directory.exists() || directory.mkdirs()) { "Unable to prepare Android integration" }
         val unsignedApk = File(directory, ".${app.id}-unsigned.apk")
         val signedApk = File(directory, "${app.id}.apk")
-        generateUnsigned(context, app, unsignedApk)
+        generateUnsigned(context, app, validated.root, unsignedApk)
         try {
             sign(unsignedApk, signedApk)
         } finally {
             unsignedApk.delete()
         }
 
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", signedApk)
+        val operation = InstallOperations.create(context, app.id, "install")
+        val params =
+            PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+        params.setAppPackageName(packageName(app.id))
+        val sessionId = context.packageManager.packageInstaller.createSession(params)
+        context.packageManager.packageInstaller.openSession(sessionId).use { session ->
+            signedApk.inputStream().use { input ->
+                session.openWrite("base.apk", 0, signedApk.length()).use { output ->
+                    input.copyTo(output)
+                    session.fsync(output)
+                }
+            }
+            val resultIntent =
+                Intent(context, PackageInstallResultReceiver::class.java)
+                    .putExtra(
+                        PackageInstallResultReceiver.EXTRA_OPERATION_ID,
+                        operation.getString("operationId"),
+                    )
+            val sender =
+                PendingIntent.getBroadcast(
+                        context,
+                        sessionId,
+                        resultIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+                    )
+                    .intentSender
+            session.commit(sender)
+        }
+        signedApk.delete()
+        return operation
+    }
+
+    fun openUnknownSourcesSettings(context: Context) {
         context.startActivity(
-            Intent(Intent.ACTION_VIEW)
-                .setDataAndType(uri, "application/vnd.android.package-archive")
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:${context.packageName}"),
+                )
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
-        return "installer-opened"
     }
 
     fun requestUninstall(context: Context, app: WebApp) {
@@ -141,7 +184,7 @@ object WrapperInstaller {
         )
     }
 
-    private fun generateUnsigned(context: Context, app: WebApp, output: File) {
+    private fun generateUnsigned(context: Context, app: WebApp, webRoot: File, output: File) {
         context.assets.open("wrappers/template.apk").use { template ->
             ZipInputStream(template).use { input ->
                 ZipOutputStream(FileOutputStream(output)).use { zip ->
@@ -153,7 +196,7 @@ object WrapperInstaller {
                             if (entry.name == "AndroidManifest.xml") {
                                 patchManifest(context, content, app)
                             } else if (entry.name == "res/drawable/icon.png") {
-                                readIcon(context, app) ?: content
+                                readIcon(context, app, webRoot) ?: content
                             } else content
                         zip.putNextEntry(
                             ZipEntry(entry.name).apply {
@@ -172,6 +215,13 @@ object WrapperInstaller {
                         zip.write(generated)
                         zip.closeEntry()
                     }
+                    webRoot.walkTopDown().filter(File::isFile).forEach { file ->
+                        val relative = file.relativeTo(webRoot).invariantSeparatorsPath
+                        check(!relative.startsWith("../") && !relative.contains("/../"))
+                        zip.putNextEntry(ZipEntry("assets/webapp/$relative").apply { time = 0L })
+                        file.inputStream().use { it.copyTo(zip) }
+                        zip.closeEntry()
+                    }
                 }
             }
         }
@@ -182,12 +232,64 @@ object WrapperInstaller {
             replaceBinaryXmlString(output, TEMPLATE_PACKAGE, packageName(app.id))
             replaceBinaryXmlString(output, TEMPLATE_LABEL, app.name.take(80))
             replaceBinaryXmlString(output, TEMPLATE_APP_ID, app.id)
+            replaceBinaryXmlString(output, TEMPLATE_VERSION_NAME, app.version.take(80))
+            replaceBinaryXmlInt(output, 0x0101021b, nextVersionCode(context, app.id))
             replaceBinaryXmlString(
                 output,
                 TEMPLATE_PLATFORM_CERT,
                 platformCertificateFingerprint(context),
             )
         }
+
+    private fun nextVersionCode(context: Context, appId: String): Int =
+        runCatching {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(packageName(appId), 0).versionCode + 1
+            }
+            .getOrDefault(1)
+
+    /** Rewrites an integer Android-manifest attribute identified by its framework resource ID. */
+    private fun replaceBinaryXmlInt(document: ByteArray, resourceId: Int, replacement: Int) {
+        var offset = 8
+        var resourceIndex = -1
+        while (offset + 8 <= document.size) {
+            val type = document.u16(offset)
+            val size = document.i32(offset + 4)
+            check(size >= 8 && offset + size <= document.size) { "Invalid wrapper manifest" }
+            if (type == 0x0180) {
+                val count = (size - 8) / 4
+                resourceIndex =
+                    (0 until count).firstOrNull { document.i32(offset + 8 + it * 4) == resourceId }
+                        ?: -1
+            } else if (type == 0x0102 && resourceIndex >= 0) {
+                val attributeStart = document.u16(offset + 24)
+                val attributeSize = document.u16(offset + 26)
+                val attributeCount = document.u16(offset + 28)
+                repeat(attributeCount) { index ->
+                    val attribute = offset + 16 + attributeStart + index * attributeSize
+                    if (document.i32(attribute + 4) == resourceIndex) {
+                        document[attribute + 15] = 0x10
+                        document.putI32(attribute + 16, replacement)
+                        return
+                    }
+                }
+            }
+            offset += size
+        }
+        error("Wrapper integer manifest attribute is missing")
+    }
+
+    private fun ByteArray.u16(offset: Int): Int =
+        (this[offset].toInt() and 0xff) or ((this[offset + 1].toInt() and 0xff) shl 8)
+
+    private fun ByteArray.i32(offset: Int): Int = u16(offset) or (u16(offset + 2) shl 16)
+
+    private fun ByteArray.putI32(offset: Int, value: Int) {
+        this[offset] = value.toByte()
+        this[offset + 1] = (value ushr 8).toByte()
+        this[offset + 2] = (value ushr 16).toByte()
+        this[offset + 3] = (value ushr 24).toByte()
+    }
 
     private fun platformCertificateFingerprint(context: Context): String {
         val flags =
@@ -203,12 +305,12 @@ object WrapperInstaller {
         }
     }
 
-    private fun readIcon(context: Context, app: WebApp): ByteArray? =
+    private fun readIcon(context: Context, app: WebApp, webRoot: File): ByteArray? =
         runCatching {
                 val iconPath = app.iconPath ?: return null
                 if (app.assetRoot != null)
                     context.assets.open("${app.assetRoot}/$iconPath").use { it.readBytes() }
-                else File(app.fileRoot ?: return null, iconPath).readBytes()
+                else File(webRoot, iconPath).readBytes()
             }
             .getOrNull()
 
@@ -288,8 +390,7 @@ object WrapperInstaller {
         return keyStore
     }
 
-    private fun packageName(appId: String): String =
-        "dev.omniand.generated.${appId.replace('-', '_')}"
+    fun packageName(appId: String): String = "dev.omniand.generated.${appId.replace('-', '_')}"
 
     private fun ByteArray.indexOf(needle: ByteArray): Int {
         outer@ for (start in 0..size - needle.size) {

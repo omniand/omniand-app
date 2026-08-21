@@ -19,7 +19,6 @@ import dev.omniand.launcher.webapps.WebAppInstaller
 import dev.omniand.launcher.webapps.WebAppRegistry
 import dev.omniand.launcher.wrappers.WrapperInstaller
 import java.io.BufferedReader
-import java.io.File
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.URLDecoder
@@ -450,7 +449,7 @@ object PlatformServer {
                         "installedApps",
                         JSONArray(
                             WebAppRegistry.apps(context)
-                                .filter { it.fileRoot != null }
+                                .filter { it.packageName != null }
                                 .map { it.id }
                         ),
                     ),
@@ -460,33 +459,53 @@ object PlatformServer {
         if (path.startsWith(installPrefix) && method == "POST") {
             if (!PermissionManager.hasCapability(context, app?.id, "apps.install"))
                 return error(403, "Missing capability: apps.install")
+            if (!isLocalWebView)
+                return codedError(
+                    403,
+                    "phone-local-required",
+                    "Applications can only be installed from the phone",
+                )
             return try {
-                val installed =
-                    WebAppInstaller.install(
+                WebAppInstaller.prepare(
                         context,
                         URLDecoder.decode(path.removePrefix(installPrefix), "UTF-8"),
                     )
-                if (installed.permissions.any { it.startsWith("sms.") }) {
-                    SmsSetupManager.recordPending(context, installed.permissions)
-                    if (isLocalWebView) SmsSetupManager.request(context, installed.permissions)
-                }
-                if (installed.permissions.any { it.startsWith("contacts.") }) {
-                    ContactsSetupManager.recordPending(context, installed.permissions)
-                    if (isLocalWebView && !installed.permissions.any { it.startsWith("sms.") })
-                        ContactsSetupManager.request(context, installed.permissions)
-                }
-                json(
-                    200,
-                    JSONObject()
-                        .put("installed", true)
-                        .put("id", installed.id)
-                        .put("name", installed.name)
-                        .put("version", installed.version),
-                )
+                    .use { validated -> json(202, WrapperInstaller.install(context, validated)) }
             } catch (error: Exception) {
                 Log.w(TAG, "Web application installation rejected", error)
                 error(400, error.message ?: "Unable to install application")
             }
+        }
+        val operationPrefix = "/api/apps/operations/"
+        if (path.startsWith(operationPrefix) && method == "GET") {
+            val operationId = URLDecoder.decode(path.removePrefix(operationPrefix), "UTF-8")
+            val operation =
+                dev.omniand.launcher.wrappers.InstallOperations.get(context, operationId)
+                    ?: return error(404, "Installation operation not found")
+            if (
+                operation.optString("kind") == "uninstall" &&
+                    operation.optString("status") == "pending-user-action"
+            ) {
+                val id = operation.getString("id")
+                if (
+                    runCatching {
+                            context.packageManager.getPackageInfo(
+                                WrapperInstaller.packageName(id),
+                                0,
+                            )
+                        }
+                        .isFailure
+                ) {
+                    WebAppRegistry.invalidate()
+                    dev.omniand.launcher.wrappers.InstallOperations.update(
+                        context,
+                        operationId,
+                        "installed",
+                    )
+                    operation.put("status", "installed")
+                }
+            }
+            return json(200, operation)
         }
         val uninstallPrefix = "/api/apps/uninstall/"
         if (path.startsWith(uninstallPrefix) && method == "POST") {
@@ -500,13 +519,12 @@ object PlatformServer {
                 val apps =
                     JSONArray().apply {
                         WebAppRegistry.apps(context).forEach { item ->
-                            val integration = WrapperInstaller.state(context, item)
                             put(
                                 JSONObject()
                                     .put("id", item.id)
                                     .put("name", item.name)
                                     .put("version", item.version)
-                                    .put("updatable", item.fileRoot != null)
+                                    .put("updatable", item.packageName != null)
                                     .put(
                                         "origin",
                                         if (!isLocalWebView) {
@@ -521,12 +539,6 @@ object PlatformServer {
                                             ?: JSONObject.NULL,
                                     )
                                     .put("permissions", JSONArray(item.permissions.toList()))
-                                    .put(
-                                        "androidIntegration",
-                                        JSONObject()
-                                            .put("supported", integration.supported)
-                                            .put("installed", integration.installed),
-                                    )
                             )
                         }
                     }
@@ -551,7 +563,7 @@ object PlatformServer {
                     )
                 val installedApp =
                     WebAppRegistry.apps(context).firstOrNull {
-                        it.id == appId && it.fileRoot != null
+                        it.id == appId && it.packageName != null
                     } ?: return error(404, "Updatable Web application not found")
                 return try {
                     val update = StoreCatalog.check(installedApp)
@@ -587,8 +599,7 @@ object PlatformServer {
                             )
                         }
                         val selected = update.catalogApp
-                        val result =
-                            WebAppInstaller.install(
+                        WebAppInstaller.prepare(
                                 context,
                                 selected.packageUrl,
                                 WebAppInstaller.Expected(
@@ -597,28 +608,9 @@ object PlatformServer {
                                     selected.permissions,
                                 ),
                             )
-                        val addedSms =
-                            update.addedCapabilities.filterTo(mutableSetOf()) {
-                                it.startsWith("sms.")
+                            .use { validated ->
+                                json(202, WrapperInstaller.install(context, validated))
                             }
-                        if (addedSms.isNotEmpty()) {
-                            SmsSetupManager.recordPending(context, result.permissions)
-                            SmsSetupManager.request(context, result.permissions)
-                        }
-                        val addedContacts =
-                            update.addedCapabilities.filterTo(mutableSetOf()) {
-                                it.startsWith("contacts.")
-                            }
-                        if (addedContacts.isNotEmpty())
-                            ContactsSetupManager.recordPending(context, result.permissions)
-                        json(
-                            200,
-                            JSONObject()
-                                .put("updated", true)
-                                .put("id", result.id)
-                                .put("previousVersion", update.currentVersion)
-                                .put("newVersion", result.version),
-                        )
                     }
                 } catch (error: Exception) {
                     Log.w(TAG, "Web application update failed", error)
@@ -644,32 +636,6 @@ object PlatformServer {
             }
             if (
                 path.startsWith(integrationPrefix) &&
-                    path.endsWith("/integrate") &&
-                    method == "POST"
-            ) {
-                if (!isLocalWebView)
-                    return error(403, "Android integration can only be installed on the phone")
-                val appId =
-                    URLDecoder.decode(
-                        path.removePrefix(integrationPrefix).removeSuffix("/integrate"),
-                        "UTF-8",
-                    )
-                if (WebAppRegistry.apps(context).none { it.id == appId })
-                    return error(404, "Web application not found")
-                return try {
-                    val appToIntegrate = WebAppRegistry.apps(context).first { it.id == appId }
-                    json(
-                        200,
-                        JSONObject()
-                            .put("status", WrapperInstaller.install(context, appToIntegrate)),
-                    )
-                } catch (error: Exception) {
-                    Log.w(TAG, "Android integration installation failed", error)
-                    error(400, error.message ?: "Unable to install Android integration")
-                }
-            }
-            if (
-                path.startsWith(integrationPrefix) &&
                     path.endsWith("/uninstall") &&
                     method == "POST"
             ) {
@@ -685,7 +651,7 @@ object PlatformServer {
         }
 
         if (app?.assetRoot != null) return staticAsset(context, app.assetRoot, path, app)
-        if (app?.fileRoot != null) return staticFile(app.fileRoot, path, app)
+        if (app?.packageName != null) return staticPackageAsset(context, app, path)
         if (WebAppRegistry.isPlatformHost(context, host))
             return staticAsset(context, "web/shell", path, null)
         return error(404, "Unknown application origin")
@@ -925,33 +891,20 @@ object PlatformServer {
 
     private fun removeWebApp(context: Context, id: String, isLocalWebView: Boolean): Response {
         return try {
+            if (!isLocalWebView)
+                return codedError(
+                    403,
+                    "phone-local-required",
+                    "Applications can only be uninstalled from the phone",
+                )
             val appToRemove =
                 WebAppRegistry.apps(context).firstOrNull { it.id == id }
                     ?: return error(404, "Web application not found")
-            if (WrapperInstaller.state(context, appToRemove).installed) {
-                if (!isLocalWebView) {
-                    return json(
-                        409,
-                        JSONObject()
-                            .put(
-                                "error",
-                                "This app has Android integration and must be uninstalled from the phone",
-                            )
-                            .put("code", "android-integration-phone-required")
-                            .put("id", id),
-                    )
-                }
-                WrapperInstaller.requestUninstall(context, appToRemove)
-                return json(
-                    409,
-                    JSONObject()
-                        .put("error", "Uninstall the Android integration first, then retry")
-                        .put("code", "android-integration-installed")
-                        .put("id", id),
-                )
-            }
-            WebAppInstaller.uninstall(context, id)
-            json(200, JSONObject().put("uninstalled", true).put("id", id))
+            check(appToRemove.id != "store") { "The system Store cannot be removed" }
+            val operation =
+                dev.omniand.launcher.wrappers.InstallOperations.create(context, id, "uninstall")
+            WrapperInstaller.requestUninstall(context, appToRemove)
+            json(202, operation)
         } catch (error: Exception) {
             Log.w(TAG, "Web application removal rejected", error)
             error(400, error.message ?: "Unable to remove application")
@@ -961,9 +914,7 @@ object PlatformServer {
     private fun readAppIcon(context: Context, app: WebApp): ByteArray? =
         runCatching {
                 val iconPath = app.iconPath ?: return null
-                if (app.assetRoot != null)
-                    context.assets.open("${app.assetRoot}/$iconPath").use { it.readBytes() }
-                else File(app.fileRoot ?: return null, iconPath).readBytes()
+                WebAppRegistry.openAsset(context, app, iconPath)
             }
             .getOrNull()
 
@@ -984,14 +935,16 @@ object PlatformServer {
         }
     }
 
-    private fun staticFile(root: java.io.File, rawPath: String, app: WebApp): Response {
+    private fun staticPackageAsset(context: Context, app: WebApp, rawPath: String): Response {
         val relative = if (rawPath == "/") "index.html" else rawPath.removePrefix("/")
         if (relative.contains("..")) return error(400, "Invalid path")
         return try {
-            val file = java.io.File(root, relative)
-            if (!file.canonicalPath.startsWith(root.canonicalPath + java.io.File.separator))
-                return error(400, "Invalid path")
-            Response("200 OK", mime(relative), file.readBytes(), CspBuilder.build(app))
+            Response(
+                "200 OK",
+                mime(relative),
+                WebAppRegistry.openAsset(context, app, relative),
+                CspBuilder.build(app),
+            )
         } catch (_: Exception) {
             error(404, "Not found")
         }
@@ -1008,6 +961,7 @@ object PlatformServer {
     private fun status(code: Int) =
         when (code) {
             200 -> "200 OK"
+            202 -> "202 Accepted"
             206 -> "206 Partial Content"
             400 -> "400 Bad Request"
             403 -> "403 Forbidden"

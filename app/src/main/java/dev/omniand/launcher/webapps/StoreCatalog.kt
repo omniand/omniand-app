@@ -90,7 +90,7 @@ object StoreCatalog {
     internal const val MAX_CATALOG_BYTES = 256 * 1024
 
     fun check(installed: WebApp, storeUrl: String = BuildConfig.STORE_URL): UpdateInfo {
-        check(installed.fileRoot != null) { "Built-in applications cannot be updated" }
+        check(installed.packageName != null) { "Built-in applications cannot be updated" }
         val entries = fetch(storeUrl)
         return findUpdate(installed, entries)
     }

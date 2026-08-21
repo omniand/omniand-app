@@ -25,6 +25,7 @@ import dev.omniand.launcher.webapps.WebAppRegistry
 class WebAppActivity : Activity() {
     private lateinit var webView: WebView
     private var fileResult: ValueCallback<Array<Uri>>? = null
+    private var currentAppId: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -35,6 +36,7 @@ class WebAppActivity : Activity() {
             finish()
             return
         }
+        currentAppId = app.id
         title = app.name
         webView =
             WebView(this).apply {
@@ -192,6 +194,16 @@ class WebAppActivity : Activity() {
         if (webView.canGoBack()) webView.goBack() else super.onBackPressed()
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (currentAppId == "store") isStoreActive = true
+    }
+
+    override fun onPause() {
+        if (currentAppId == "store") isStoreActive = false
+        super.onPause()
+    }
+
     override fun onDestroy() {
         if (::webView.isInitialized) webView.destroy()
         super.onDestroy()
@@ -208,6 +220,10 @@ class WebAppActivity : Activity() {
     }
 
     companion object {
+        @Volatile
+        var isStoreActive: Boolean = false
+            private set
+
         const val EXTRA_APP_ID = "appId"
         const val EXTRA_ANDROID_INTEGRATION = "androidIntegration"
         const val EXTRA_ROUTE = "route"

@@ -1,6 +1,5 @@
 package dev.omniand.launcher.webapps
 
-import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -73,5 +72,11 @@ class StoreCatalogTest {
     }
 
     private fun installedApp(version: String, permissions: Set<String>) =
-        WebApp("messages", "Messages", version, permissions, fileRoot = File("messages"))
+        WebApp(
+            "messages",
+            "Messages",
+            version,
+            permissions,
+            packageName = "dev.omniand.generated.messages",
+        )
 }

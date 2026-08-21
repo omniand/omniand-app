@@ -88,6 +88,19 @@
         <receiver
             android:name=".sms.MmsSendResultReceiver"
             android:exported="false" />
+        <receiver
+            android:name=".wrappers.PackageInstallResultReceiver"
+            android:exported="false" />
+        <receiver
+            android:name=".wrappers.PackageChangeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.PACKAGE_ADDED" />
+                <action android:name="android.intent.action.PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.PACKAGE_REMOVED" />
+                <data android:scheme="package" />
+            </intent-filter>
+        </receiver>
         <service
             android:name=".sms.MmsDownloadJob"
             android:exported="false"

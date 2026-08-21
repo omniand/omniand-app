@@ -52,7 +52,10 @@ The canonical Web files live in `../omniAndStore/platform/shell/` and
 into the APK. The HTTP server reads and serves those assets; the WebView must not load them with
 `file://` URLs.
 
-The `wrappers/template/` Gradle application module is the generic Android-integration template. It must not contain any Web package or app-specific native logic. The Platform embeds it, rewrites its binary manifest for an installed app, signs it with the Android-Keystore wrapper key, and hands the generated APK to Android's package installer.
+The `wrappers/template/` Gradle application module is the generic Android wrapper template. It must
+not contain a prebuilt Web package or app-specific native logic. During installation the Platform
+injects the validated catalog package under `assets/webapp/`, rewrites the manifest and icon, signs
+the result with the Android-Keystore wrapper key, and commits it through `PackageInstaller`.
 
 ## HTTP origins and virtual hosts
 
@@ -132,7 +135,7 @@ For the project, verify all of the following on an Android device or AVD:
 
 ## Scope control
 
-Preserve the existing Store/package installation path, SMS read/send/modify support, incoming-message handling, notifications, and generic on-demand wrapper generation. Do not add calls, cloud synchronization, remote Internet access, JavaScript compatibility layers, WebRTC, WebSockets, MMS completion, or advanced package management unless explicitly requested. Android wrapper APK integration is a separate optional layer; do not duplicate Web packages into wrappers.
+Preserve the existing Store/package installation path, SMS read/send/modify support, incoming-message handling, notifications, and generic wrapper generation. Do not add calls, cloud synchronization, remote Internet access, JavaScript compatibility layers, WebRTC, WebSockets, MMS completion, or advanced package management unless explicitly requested. Catalog Web packages are installed only as assets in their generated wrappers; do not also store private file-backed copies.
 
 OmniAnd is an actively developed, production-oriented platform. Describe limitations using their concrete security, deployment, feature, or validation status rather than applying a general maturity label.
 

@@ -63,6 +63,9 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        isActive = true
+        WebAppRegistry.invalidate()
+        if (!ContactsSetupManager.openPendingSetup(this)) SmsSetupManager.openPendingSetup(this)
         if (::webView.isInitialized) {
             webView.post {
                 webView.evaluateJavascript(
@@ -73,8 +76,19 @@ class MainActivity : Activity() {
         }
     }
 
+    override fun onPause() {
+        isActive = false
+        super.onPause()
+    }
+
     override fun onDestroy() {
         webView.destroy()
         super.onDestroy()
+    }
+
+    companion object {
+        @Volatile
+        var isActive: Boolean = false
+            private set
     }
 }
