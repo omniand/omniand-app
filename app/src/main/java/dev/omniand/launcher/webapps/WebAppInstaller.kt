@@ -18,7 +18,15 @@ object WebAppInstaller {
     private const val MAX_ENTRIES = 100
     private val validId = Regex("[a-z][a-z0-9-]{0,31}")
     private val knownCapabilities =
-        setOf("sms.read", "sms.send", "sms.modify", "contacts.read", "contacts.write")
+        setOf(
+            "sms.read",
+            "sms.send",
+            "sms.modify",
+            "contacts.read",
+            "contacts.write",
+            "media.read",
+            "media.write",
+        )
 
     data class Installed(
         val id: String,

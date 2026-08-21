@@ -4,8 +4,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
+import dev.omniand.launcher.MainActivity
 import dev.omniand.launcher.WebAppActivity
 import dev.omniand.launcher.contacts.ContactsSetupManager
+import dev.omniand.launcher.media.MediaSetupManager
 import dev.omniand.launcher.sms.SmsSetupManager
 import dev.omniand.launcher.webapps.WebAppRegistry
 
@@ -19,7 +21,7 @@ class PackageInstallResultReceiver : BroadcastReceiver() {
             InstallOperations.update(context, operationId, "pending-user-action")
             @Suppress("DEPRECATION")
             val confirmation = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
-            if (confirmation != null && WebAppActivity.isStoreActive) {
+            if (confirmation != null && (MainActivity.isActive || WebAppActivity.isStoreActive)) {
                 confirmation.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(confirmation)
             }
@@ -37,6 +39,8 @@ class PackageInstallResultReceiver : BroadcastReceiver() {
                     SmsSetupManager.recordPending(context, app.permissions)
                 if (app.permissions.any { it.startsWith("contacts.") })
                     ContactsSetupManager.recordPending(context, app.permissions)
+                if (app.permissions.any { it.startsWith("media.") })
+                    MediaSetupManager.recordPending(context, app.permissions)
                 InstallOperations.update(context, operationId, "installed")
             } else
                 InstallOperations.update(

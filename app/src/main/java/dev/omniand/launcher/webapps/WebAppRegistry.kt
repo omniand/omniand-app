@@ -33,7 +33,15 @@ object WebAppRegistry {
         )
     private val validId = Regex("[a-z][a-z0-9-]{0,31}")
     private val knownCapabilities =
-        setOf("sms.read", "sms.send", "sms.modify", "contacts.read", "contacts.write")
+        setOf(
+            "sms.read",
+            "sms.send",
+            "sms.modify",
+            "contacts.read",
+            "contacts.write",
+            "media.read",
+            "media.write",
+        )
     @Volatile private var cached: List<WebApp>? = null
 
     fun apps(context: Context): List<WebApp> {

@@ -8,6 +8,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import dev.omniand.launcher.contacts.ContactsSetupManager
+import dev.omniand.launcher.media.MediaSetupManager
 import dev.omniand.launcher.server.LocalOriginRouter
 import dev.omniand.launcher.server.PlatformServer
 import dev.omniand.launcher.sms.SmsSetupManager
@@ -53,7 +54,7 @@ class MainActivity : Activity() {
             }
         setContentView(webView)
 
-        if (!ContactsSetupManager.openPendingSetup(this)) SmsSetupManager.openPendingSetup(this)
+        openPendingSetup()
     }
 
     @Deprecated("Deprecated in Java")
@@ -65,7 +66,7 @@ class MainActivity : Activity() {
         super.onResume()
         isActive = true
         WebAppRegistry.invalidate()
-        if (!ContactsSetupManager.openPendingSetup(this)) SmsSetupManager.openPendingSetup(this)
+        openPendingSetup()
         if (::webView.isInitialized) {
             webView.post {
                 webView.evaluateJavascript(
@@ -84,6 +85,12 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         webView.destroy()
         super.onDestroy()
+    }
+
+    private fun openPendingSetup() {
+        if (MediaSetupManager.openPendingSetup(this)) return
+        if (ContactsSetupManager.openPendingSetup(this)) return
+        SmsSetupManager.openPendingSetup(this)
     }
 
     companion object {

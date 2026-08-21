@@ -18,6 +18,7 @@ import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
 import dev.omniand.launcher.contacts.ContactsSetupManager
+import dev.omniand.launcher.media.MediaSetupManager
 import dev.omniand.launcher.server.LocalOriginRouter
 import dev.omniand.launcher.server.PlatformServer
 import dev.omniand.launcher.sms.SmsNotifications
@@ -60,8 +61,19 @@ class WebAppActivity : Activity() {
                             fileResult?.onReceiveValue(null)
                             fileResult = callback
                             return try {
+                                val chooser = params.createIntent()
+                                if (app.id == "gallery") {
+                                    chooser.type = "*/*"
+                                    chooser.putExtra(
+                                        Intent.EXTRA_MIME_TYPES,
+                                        arrayOf("image/*", "video/*"),
+                                    )
+                                    chooser.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                                } else {
+                                    chooser.type = "image/*"
+                                }
                                 startActivityForResult(
-                                    params.createIntent().apply { type = "image/*" },
+                                    chooser,
                                     FILE_CHOOSER,
                                 )
                                 true
@@ -114,18 +126,18 @@ class WebAppActivity : Activity() {
                 LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
                     addView(
+                        createNavigationBar(app.name),
+                        LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            dp(56),
+                        ),
+                    )
+                    addView(
                         webView,
                         LinearLayout.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             0,
                             1f,
-                        ),
-                    )
-                    addView(
-                        createNavigationBar(app.name),
-                        LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            dp(56),
                         ),
                     )
                 }
@@ -200,7 +212,11 @@ class WebAppActivity : Activity() {
         super.onResume()
         if (currentAppId == "store") {
             isStoreActive = true
-            if (!ContactsSetupManager.openPendingSetup(this)) SmsSetupManager.openPendingSetup(this)
+            if (
+                !MediaSetupManager.openPendingSetup(this) &&
+                    !ContactsSetupManager.openPendingSetup(this)
+            )
+                SmsSetupManager.openPendingSetup(this)
         }
     }
 
