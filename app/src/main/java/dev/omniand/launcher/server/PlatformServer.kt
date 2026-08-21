@@ -316,7 +316,7 @@ object PlatformServer {
             SmsSetupManager.request(context, app?.permissions.orEmpty())
             return json(200, JSONObject().put("opened", true))
         }
-        if (path == "/api/sms" && method == "GET") return sms(context, app)
+        if (path == "/api/sms" && method == "GET") return smsListResponse(context, host)
         if (path == "/api/sms/events" && method == "GET") {
             if (!PermissionManager.hasCapability(context, app?.id, "sms.read"))
                 return error(403, "Missing capability: sms.read")
@@ -693,6 +693,11 @@ object PlatformServer {
 
     private fun sms(context: Context, app: WebApp?): Response {
         return sms(context, app) { it.recent() }
+    }
+
+    /** Serves the legacy SMS collection through both Ktor and direct WebView routing. */
+    internal fun smsListResponse(context: Context, host: String): Response {
+        return sms(context.applicationContext, WebAppRegistry.byHost(context, host.lowercase()))
     }
 
     private fun smsPart(
