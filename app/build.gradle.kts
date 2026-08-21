@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -64,7 +66,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+    kotlin { compilerOptions { jvmTarget.set(JvmTarget.JVM_17) } }
 
     sourceSets
         .getByName("main")
@@ -80,6 +82,9 @@ tasks.named("preBuild").configure { dependsOn(bundleWrapperTemplate, syncEmbedde
 dependencies {
     implementation("androidx.core:core:1.15.0")
     implementation("com.android.tools.build:apksig:8.7.3")
+    implementation("io.ktor:ktor-server-cio:3.3.1")
+    implementation("io.ktor:ktor-server-core:3.3.1")
+    runtimeOnly("org.slf4j:slf4j-nop:2.0.17")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
 }

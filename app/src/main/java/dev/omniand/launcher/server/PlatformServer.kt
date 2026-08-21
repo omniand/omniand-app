@@ -22,14 +22,8 @@ import dev.omniand.launcher.webapps.WebApp
 import dev.omniand.launcher.webapps.WebAppInstaller
 import dev.omniand.launcher.webapps.WebAppRegistry
 import dev.omniand.launcher.wrappers.WrapperInstaller
-import java.io.BufferedInputStream
-import java.net.InetAddress
-import java.net.ServerSocket
 import java.net.URLDecoder
 import java.util.Base64
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONArray
 import org.json.JSONObject
@@ -44,113 +38,37 @@ import org.json.JSONObject
 object PlatformServer {
     const val PORT = 8080
     private val started = AtomicBoolean(false)
-    private val workers = Executors.newCachedThreadPool()
 
     fun start(context: Context) {
         if (!started.compareAndSet(false, true)) return
         val appContext = context.applicationContext
         ContactsEventBroadcaster.start(appContext)
         MediaEventBroadcaster.start(appContext)
-        val ready = CountDownLatch(1)
-        Thread({ serve(appContext, ready) }, "platform-http-$PORT").apply {
-            isDaemon = true
-            start()
-        }
-        ready.await(2, TimeUnit.SECONDS)
-    }
-
-    private fun serve(context: Context, ready: CountDownLatch) {
-        try {
-            ServerSocket(PORT, 50, InetAddress.getByName("0.0.0.0")).use { server ->
-                ready.countDown()
-                while (!server.isClosed) {
-                    val socket = server.accept()
-                    workers.execute {
-                        socket.use { client ->
-                            runCatching {
-                                    handle(
-                                        context,
-                                        BufferedInputStream(client.getInputStream()),
-                                        client.getOutputStream(),
-                                    )
-                                }
-                                .onFailure { Log.e(TAG, "HTTP request failed", it) }
-                        }
-                    }
-                }
+        runCatching { KtorServer.start(appContext) }
+            .onFailure {
+                started.set(false)
+                Log.e(TAG, "Ktor server failed to start", it)
             }
-        } catch (_: Exception) {
-            ready.countDown()
-            started.set(false)
-        }
     }
 
-    private fun handle(context: Context, input: BufferedInputStream, output: java.io.OutputStream) {
-        val request = readHttpLine(input) ?: return
-        val parts = request.split(' ')
-        if (parts.size < 2) return
-        val method = parts[0]
-        val target = parts[1]
-        val path = target.substringBefore('?')
-        val query = parseQuery(target.substringAfter('?', ""))
-        var host = "127.0.0.1"
-        var contentLength = 0
-        val requestHeaders = mutableMapOf<String, String>()
-        while (true) {
-            val line = readHttpLine(input) ?: break
-            if (line.isEmpty()) break
-            val name = line.substringBefore(':', "").trim().lowercase()
-            if (name.isNotEmpty()) requestHeaders[name] = line.substringAfter(':').trim()
-            if (line.startsWith("Host:", true))
-                host = line.substringAfter(':').trim().substringBefore(':')
-            if (line.startsWith("Content-Length:", true))
-                contentLength = line.substringAfter(':').trim().toIntOrNull() ?: 0
-        }
-        if (contentLength > MAX_REQUEST_BODY) {
-            write(output, error(413, "Request body is too large"))
-            return
-        }
-        val body = ByteArray(contentLength)
-        var bodyOffset = 0
-        while (bodyOffset < body.size) {
-            val count = input.read(body, bodyOffset, body.size - bodyOffset)
-            if (count < 0) break
-            bodyOffset += count
-        }
-
-        val response =
-            route(
-                context,
-                method,
-                path,
-                query,
-                host.lowercase(),
-                isLocalWebView = false,
-                requestHeaders,
-                body,
-            )
-        write(output, response)
-    }
-
-    private fun write(output: java.io.OutputStream, response: Response) {
-        val headers = buildString {
-            append("HTTP/1.1 ${response.status}\r\n")
-            append("Content-Type: ${response.contentType}\r\n")
-            response.contentLength?.let { append("Content-Length: $it\r\n") }
-            response.headers.forEach { (name, value) -> append("$name: $value\r\n") }
-            append("Connection: close\r\n\r\n")
-        }
-        output.write(headers.toByteArray(Charsets.US_ASCII))
-        response.openBody().use { input ->
-            val buffer = ByteArray(4096)
-            while (true) {
-                val count = input.read(buffer)
-                if (count < 0) break
-                output.write(buffer, 0, count)
-                output.flush()
-            }
-        }
-    }
+    internal fun networkResponse(
+        context: Context,
+        method: String,
+        path: String,
+        host: String,
+        headers: Map<String, String>,
+        body: ByteArray,
+    ): Response =
+        route(
+            context.applicationContext,
+            method,
+            path.substringBefore('?'),
+            parseQuery(path.substringAfter('?', "")),
+            host.lowercase(),
+            isLocalWebView = false,
+            headers.mapKeys { it.key.lowercase() },
+            body,
+        )
 
     fun localResponse(
         context: Context,
@@ -1066,19 +984,6 @@ object PlatformServer {
                     URLDecoder.decode(it.substringAfter('=', ""), "UTF-8")
             }
 
-    private fun readHttpLine(input: BufferedInputStream): String? {
-        val bytes = java.io.ByteArrayOutputStream()
-        while (bytes.size() <= MAX_HEADER_LINE) {
-            val value = input.read()
-            if (value < 0)
-                return if (bytes.size() == 0) null else bytes.toString(Charsets.US_ASCII.name())
-            if (value == '\n'.code)
-                return bytes.toString(Charsets.US_ASCII.name()).removeSuffix("\r")
-            bytes.write(value)
-        }
-        throw IllegalArgumentException("HTTP header line is too long")
-    }
-
     private fun sms(context: Context, app: WebApp?, operation: (SmsService) -> Any): Response {
         if (!PermissionManager.hasCapability(context, app?.id, "sms.read"))
             return error(403, "Missing capability: sms.read")
@@ -1369,8 +1274,7 @@ object PlatformServer {
     }
 
     private const val TAG = "OmniAndHttp"
-    private const val MAX_REQUEST_BODY = 256 * 1024
-    private const val MAX_HEADER_LINE = 512 * 1024
+    internal const val MAX_REQUEST_BODY = 256 * 1024
     private const val MAX_CONTACT_JSON = 96 * 1024
     private const val MAX_CONTACT_PHOTO = 256 * 1024
     private const val MAX_PHOTO_HEADER = 400 * 1024
