@@ -33,6 +33,7 @@ object WebAppInstaller {
         val name: String,
         val version: String,
         val permissions: Set<String>,
+        val localizedNames: Map<String, String> = emptyMap(),
     )
 
     data class Expected(val id: String, val version: String, val permissions: Set<String>)
@@ -64,6 +65,7 @@ object WebAppInstaller {
             val manifest = JSONObject(manifestFile.readText())
             val id = manifest.getString("id")
             val name = manifest.getString("name").trim()
+            val localizedNames = AppLocalization.strings(manifest, "name", 80)
             val version = manifest.getString("version")
             check(validId.matches(id)) { "Invalid application id" }
             check(name.isNotEmpty() && name.length <= 80) { "Invalid application name" }
@@ -90,9 +92,12 @@ object WebAppInstaller {
                     check(permission in knownCapabilities) { "Unknown capability" }
                     declaredPermissions += permission
                 }
-            validateExpected(Installed(id, name, version, declaredPermissions), expected)
+            validateExpected(
+                Installed(id, name, version, declaredPermissions, localizedNames),
+                expected,
+            )
 
-            val metadata = Installed(id, name, version, declaredPermissions)
+            val metadata = Installed(id, name, version, declaredPermissions, localizedNames)
             return ValidatedPackage(metadata, packageRoot, staging)
         } catch (error: Exception) {
             staging.deleteRecursively()

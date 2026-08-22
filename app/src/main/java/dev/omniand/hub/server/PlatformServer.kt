@@ -23,6 +23,9 @@ import dev.omniand.hub.webapps.StoreCatalog
 import dev.omniand.hub.webapps.WebApp
 import dev.omniand.hub.webapps.WebAppInstaller
 import dev.omniand.hub.webapps.WebAppRegistry
+import dev.omniand.hub.webapps.displayCategory
+import dev.omniand.hub.webapps.displayName
+import dev.omniand.hub.webapps.displayTagline
 import dev.omniand.hub.wrappers.WrapperInstaller
 import io.ktor.http.ContentType
 import io.ktor.http.Headers
@@ -585,7 +588,7 @@ object PlatformServer {
         if (path == "/api/apps/catalog" && method == "GET") {
             if (!isLocalPlatformHome)
                 return codedError(403, "phone-local-required", "Catalog access is phone-local")
-            return catalogResponse(context)
+            return catalogResponse(context, headers["accept-language"])
         }
         val catalogIcon = Regex("^/api/apps/catalog/([^/]+)/icon$").matchEntire(path)
         if (catalogIcon != null && method == "GET") {
@@ -654,7 +657,10 @@ object PlatformServer {
                             put(
                                 JSONObject()
                                     .put("id", item.id)
-                                    .put("name", item.name)
+                                    .put(
+                                        "name",
+                                        item.displayName(headers["accept-language"]),
+                                    )
                                     .put("version", item.version)
                                     .put("updatable", item.packageName != null)
                                     .put(
@@ -721,6 +727,7 @@ object PlatformServer {
                 app,
                 isLocalWebView,
                 request.authority,
+                headers["accept-language"],
             )
         if (app?.packageName != null)
             return staticPackageAsset(
@@ -729,6 +736,7 @@ object PlatformServer {
                 path,
                 isLocalWebView,
                 request.authority,
+                headers["accept-language"],
             )
         if (WebAppRegistry.isPlatformHost(context, host))
             return staticAsset(
@@ -738,6 +746,7 @@ object PlatformServer {
                 null,
                 isLocalWebView,
                 host,
+                headers["accept-language"],
             )
         return error(404, "Unknown application origin")
     }
@@ -1152,7 +1161,7 @@ object PlatformServer {
     }
 
     /** Returns display-only catalog metadata with installation state computed on every request. */
-    private fun catalogResponse(context: Context): PlatformContent =
+    private fun catalogResponse(context: Context, languageTags: String?): PlatformContent =
         try {
             val installed = WebAppRegistry.apps(context).associateBy { it.id }
             val entries =
@@ -1163,10 +1172,10 @@ object PlatformServer {
                         put(
                             JSONObject()
                                 .put("id", item.id)
-                                .put("name", item.name)
-                                .put("tagline", item.tagline)
+                                .put("name", item.displayName(languageTags))
+                                .put("tagline", item.displayTagline(languageTags))
                                 .put("version", item.version)
-                                .put("category", item.category)
+                                .put("category", item.displayCategory(languageTags))
                                 .put("permissions", JSONArray(item.permissions.sorted()))
                                 .put("icon", "/api/apps/catalog/${item.id}/icon")
                                 .put("installedVersion", current?.version ?: JSONObject.NULL)
@@ -1255,12 +1264,21 @@ object PlatformServer {
         app: WebApp?,
         isLocalWebView: Boolean,
         requestAuthority: String,
+        languageTags: String?,
     ): PlatformContent {
         val relative = if (rawPath == "/") "index.html" else rawPath.removePrefix("/")
         if (relative.contains("..")) return error(400, "Invalid path")
         return try {
             val bytes = context.assets.open("$root/$relative").use { it.readBytes() }
-            val body = desktopDocument(bytes, relative, app, isLocalWebView, requestAuthority)
+            val body =
+                desktopDocument(
+                    bytes,
+                    relative,
+                    app,
+                    isLocalWebView,
+                    requestAuthority,
+                    languageTags,
+                )
             val csp = app?.let(CspBuilder::build) ?: CspBuilder.buildPlatform()
             PlatformContent("200 OK", mime(relative), body, csp)
         } catch (_: Exception) {
@@ -1274,6 +1292,7 @@ object PlatformServer {
         rawPath: String,
         isLocalWebView: Boolean,
         requestAuthority: String,
+        languageTags: String?,
     ): PlatformContent {
         val relative = if (rawPath == "/") "index.html" else rawPath.removePrefix("/")
         if (relative.contains("..")) return error(400, "Invalid path")
@@ -1287,6 +1306,7 @@ object PlatformServer {
                     app,
                     isLocalWebView,
                     requestAuthority,
+                    languageTags,
                 ),
                 CspBuilder.build(app),
             )
@@ -1301,11 +1321,12 @@ object PlatformServer {
         app: WebApp?,
         isLocalWebView: Boolean,
         requestAuthority: String,
+        languageTags: String?,
     ): ByteArray =
         if (!isLocalWebView && app != null && relative.endsWith(".html")) {
             DesktopNavigationBar.inject(
                 bytes,
-                app.name,
+                app.displayName(languageTags),
                 DesktopNavigationBar.platformHref(app.id, requestAuthority),
             )
         } else {

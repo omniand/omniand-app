@@ -31,6 +31,8 @@ class StoreCatalogTest {
         assertEquals("messages", entry.id)
         assertEquals("Messages", entry.name)
         assertEquals("One line", entry.tagline)
+        assertEquals("Messagerie", entry.displayName("fr-FR,fr;q=0.9"))
+        assertEquals("Messages", entry.displayName("en-US,en;q=0.9"))
         assertEquals(setOf("sms.read"), entry.permissions)
         assertEquals("https://catalog.example/packages/messages-2.0.0.zip", entry.packageUrl)
         assertEquals("https://catalog.example/catalog/icons/messages.png", entry.iconUrl)
@@ -85,6 +87,6 @@ class StoreCatalogTest {
     }
 
     private fun catalog() =
-        """[{"id":"messages","name":"Messages","tagline":"One line","version":"2.0.0","category":"Communication","permissions":["sms.read"],"packageUrl":"/packages/messages-2.0.0.zip","iconUrl":"/catalog/icons/messages.png"}]"""
+        """[{"id":"messages","name":"Messages","locales":{"fr":{"name":"Messagerie"}},"tagline":"One line","version":"2.0.0","category":"Communication","permissions":["sms.read"],"packageUrl":"/packages/messages-2.0.0.zip","iconUrl":"/catalog/icons/messages.png"}]"""
             .toByteArray()
 }

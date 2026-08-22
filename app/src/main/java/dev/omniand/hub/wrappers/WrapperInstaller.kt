@@ -15,6 +15,7 @@ import com.android.apksig.ApkSigner
 import com.android.apksig.KeyConfig
 import dev.omniand.hub.webapps.WebApp
 import dev.omniand.hub.webapps.WebAppInstaller
+import dev.omniand.hub.webapps.displayName
 import java.io.File
 import java.io.FileOutputStream
 import java.math.BigInteger
@@ -24,6 +25,7 @@ import java.security.MessageDigest
 import java.security.PrivateKey
 import java.security.cert.X509Certificate
 import java.util.Calendar
+import java.util.Locale
 import java.util.zip.CRC32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
@@ -124,6 +126,7 @@ object WrapperInstaller {
                     JSONObject(File(validated.root, "manifest.json").readText())
                         .optString("icon")
                         .takeIf(String::isNotBlank),
+                localizedNames = metadata.localizedNames,
             )
 
         val directory = File(context.cacheDir, "wrappers")
@@ -244,7 +247,11 @@ object WrapperInstaller {
                 TEMPLATE_DYNAMIC_PERMISSION,
                 "${packageName(app.id)}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
             )
-            replaceBinaryXmlString(output, TEMPLATE_LABEL, app.name.take(80))
+            replaceBinaryXmlString(
+                output,
+                TEMPLATE_LABEL,
+                app.displayName(Locale.getDefault().toLanguageTag()).take(80),
+            )
             replaceBinaryXmlString(output, TEMPLATE_APP_ID, app.id)
             replaceBinaryXmlString(output, TEMPLATE_VERSION_NAME, app.version.take(80))
             replaceBinaryXmlInt(output, 0x0101021b, nextVersionCode(context, app.id))

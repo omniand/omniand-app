@@ -16,7 +16,11 @@ data class WebApp(
     val assetRoot: String? = null,
     val packageName: String? = null,
     val iconPath: String? = null,
+    val localizedNames: Map<String, String> = emptyMap(),
 )
+
+fun WebApp.displayName(languageTags: String?): String =
+    AppLocalization.select(name, localizedNames, languageTags)
 
 /** Discovers catalog applications exclusively from trusted, installed wrapper APKs. */
 object WebAppRegistry {
@@ -105,6 +109,7 @@ object WebAppRegistry {
                         check(manifest.getString("id") == id)
                         val name = manifest.getString("name").trim()
                         check(name.isNotEmpty() && name.length <= 80)
+                        val localizedNames = AppLocalization.strings(manifest, "name", 80)
                         val version = manifest.getString("version")
                         val permissions = buildSet {
                             manifest.optJSONArray("permissions")?.let { values ->
@@ -133,6 +138,7 @@ object WebAppRegistry {
                             permissions,
                             packageName = packageName,
                             iconPath = icon,
+                            localizedNames = localizedNames,
                         )
                     }
                     .getOrNull()

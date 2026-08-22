@@ -16,7 +16,19 @@ data class CatalogApp(
     val permissions: Set<String>,
     val packageUrl: String,
     val iconUrl: String,
+    val localizedNames: Map<String, String> = emptyMap(),
+    val localizedTaglines: Map<String, String> = emptyMap(),
+    val localizedCategories: Map<String, String> = emptyMap(),
 )
+
+fun CatalogApp.displayName(languageTags: String?): String =
+    AppLocalization.select(name, localizedNames, languageTags)
+
+fun CatalogApp.displayTagline(languageTags: String?): String =
+    AppLocalization.select(tagline, localizedTaglines, languageTags)
+
+fun CatalogApp.displayCategory(languageTags: String?): String =
+    AppLocalization.select(category, localizedCategories, languageTags)
 
 object SemanticVersion {
     private val pattern =
@@ -141,6 +153,9 @@ object StoreCatalog {
                 val tagline = item.getString("tagline").trim()
                 val version = item.getString("version")
                 val category = item.getString("category").trim()
+                val localizedNames = AppLocalization.strings(item, "name", 80)
+                val localizedTaglines = AppLocalization.strings(item, "tagline", 160)
+                val localizedCategories = AppLocalization.strings(item, "category", 80)
                 check(validId.matches(id) && id != "store") { "Invalid or reserved application id" }
                 check(ids.add(id)) { "Duplicate catalog application id" }
                 check(name.isNotEmpty() && name.length <= 80) { "Invalid application name" }
@@ -179,6 +194,9 @@ object StoreCatalog {
                         declared,
                         packageUri.toString(),
                         iconUri.toString(),
+                        localizedNames,
+                        localizedTaglines,
+                        localizedCategories,
                     )
                 )
             }

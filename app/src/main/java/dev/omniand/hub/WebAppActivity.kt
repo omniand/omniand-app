@@ -11,6 +11,8 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import dev.omniand.hub.sms.SmsNotifications
 import dev.omniand.hub.webapps.WebAppRegistry
+import dev.omniand.hub.webapps.displayName
+import java.util.Locale
 
 class WebAppActivity : Activity() {
     private lateinit var webView: WebView
@@ -24,7 +26,7 @@ class WebAppActivity : Activity() {
             finish()
             return
         }
-        title = app.name
+        title = app.displayName(Locale.getDefault().toLanguageTag())
         webView =
             WebView(this).apply {
                 settings.javaScriptEnabled = true
