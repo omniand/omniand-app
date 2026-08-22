@@ -18,7 +18,11 @@ val bundleWrapperTemplate by
     }
 
 val webProject = rootProject.layout.projectDirectory.dir("../omniAndStore")
-val platformShellSource = rootProject.layout.projectDirectory.dir("../omniAndStore/platform/shell")
+val platformShellSource = rootProject.layout.projectDirectory.dir("../omniAndStore/apps/shell")
+val platformShellOutput =
+    rootProject.layout.projectDirectory.dir("../omniAndStore/build/embedded/shell")
+val platformPairingSource =
+    rootProject.layout.projectDirectory.dir("../omniAndStore/platform/pairing")
 val platformHost =
     providers
         .gradleProperty("omniandPlatformHost")
@@ -38,16 +42,29 @@ check(
     "omniandPlatformHost must be a lowercase DNS hostname"
 }
 
+val buildPlatformShell by
+    tasks.registering(Exec::class) {
+        workingDir(webProject)
+        commandLine("npm", "run", "build:shell")
+        inputs.dir(platformShellSource)
+        inputs.dir(webProject.dir("src"))
+        inputs.file(webProject.file("package-lock.json"))
+        inputs.file(webProject.file("vite.app.config.js"))
+        outputs.dir(platformShellOutput)
+    }
+
 val syncEmbeddedWeb by
     tasks.registering(Sync::class) {
-        inputs.dir(platformShellSource)
-        from(platformShellSource) {
-            exclude("*.test.js")
-            into("web/shell")
-        }
+        dependsOn(buildPlatformShell)
+        inputs.dir(platformShellOutput)
+        inputs.dir(platformPairingSource)
+        from(platformShellOutput) { into("web/shell") }
+        from(platformPairingSource) { into("web/pairing") }
         into(layout.buildDirectory.dir("generated/embeddedWebAssets"))
         doFirst {
-            check(platformShellSource.asFile.isDirectory) {
+            check(
+                platformShellSource.asFile.isDirectory && platformPairingSource.asFile.isDirectory
+            ) {
                 "Platform Home source is missing at ${platformShellSource.asFile}"
             }
         }

@@ -42,13 +42,16 @@ app/src/main/
 
 ```text
 app/build/generated/embeddedWebAssets/
-└── web/shell/                    # copied from ../omniAndStore at build time
+├── web/shell/                    # built React bundle from ../omniAndStore/apps/shell
+└── web/pairing/                  # separate vanilla pre-authentication surface
 ```
 
-The canonical Platform Home files live in `../omniAndStore/platform/shell/`. It contains both the
-Installed launcher and the Android-only Available catalog. Gradle embeds only this vanilla Shell;
-the external catalog is static metadata, icons, and packages and has no Web UI. The HTTP server
-reads and serves generated assets; the WebView must not load them with `file://` URLs.
+The authenticated Platform Home source lives in `../omniAndStore/apps/shell/`. It is an embedded-only
+React/shadcn Hub UI with Apps and an Android-only Discover catalog; it has no manifest, package,
+catalog entry, wrapper, or application hostname. Gradle builds and embeds its generated bundle.
+The vanilla pairing surface lives separately under `../omniAndStore/platform/pairing/` and is
+embedded independently. The HTTP server reads and serves generated assets; the WebView must not
+load them with `file://` URLs.
 
 The `wrappers/template/` Gradle application module is the generic Android wrapper template. It must
 not contain a prebuilt Web package or app-specific native logic. During installation the Platform
@@ -112,12 +115,10 @@ When suggesting an interactive editor, use `vim`, not `nano`.
 
 ## Validation
 
-For Web changes, check JavaScript and manifests:
+For Web changes, use the shared store checks:
 
 ```sh
-node --check app/src/main/assets/web/shell/app.js
-node --check ../omniAndStore/apps/messages/app.js
-node --check ../omniAndStore/apps/test/app.js
+npm --prefix ../omniAndStore run check
 ```
 
 For the project, verify all of the following on an Android device or AVD:

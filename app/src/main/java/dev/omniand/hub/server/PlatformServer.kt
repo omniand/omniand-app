@@ -189,12 +189,12 @@ object PlatformServer {
                 parsed.second !in setOf(null, 443)
         )
             return null
-        if (method == "GET" && path in setOf("/", "/pairing.js", "/pairing.css")) {
-            val relative = if (path == "/") "pairing.html" else path.removePrefix("/")
-            val bytes = context.assets.open("web/shell/$relative").use { it.readBytes() }
+        val pairingAsset = if (method == "GET") pairingAssetPath(path) else null
+        if (pairingAsset != null) {
+            val bytes = context.assets.open("web/pairing/$pairingAsset").use { it.readBytes() }
             return PlatformContent(
                 "200 OK",
-                mime(relative),
+                mime(pairingAsset),
                 bytes,
                 CspBuilder.buildPairing(),
             )
@@ -243,6 +243,16 @@ object PlatformServer {
         }
         return null
     }
+
+    /** Maps the complete and intentionally small pre-authentication pairing asset surface. */
+    internal fun pairingAssetPath(path: String): String? =
+        when {
+            path == "/" -> "index.html"
+            path in setOf("/pairing.js", "/pairing.css", "/i18n.js") -> path.removePrefix("/")
+            path.matches(Regex("^/locales/(?:en|fr)\\.json$")) -> path.removePrefix("/")
+            path == "/vendor/i18next/i18next.min.js" -> path.removePrefix("/")
+            else -> null
+        }
 
     internal fun parseAuthority(authority: String): Pair<String, Int?>? {
         val value = authority.trim().lowercase()

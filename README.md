@@ -42,11 +42,14 @@ remain unavailable to paired desktops.
 | `messages.phone.example.org` | Messages | `sms.read`, `sms.send`, `sms.modify` |
 | `test.phone.example.org` | Permission test | None |
 
-The canonical Platform Home Web source lives in `../omniAndStore/platform/shell/`. Its Installed
-view is available to Android and paired desktop browsers; its Android-only Available view lists and
-installs the external catalog. The Android build embeds only this Shell. Messages, Permission Test,
-and every other application live in `../omniAndStore/` and appear in Installed only after catalog
-installation.
+The authenticated Platform Home Web source lives in `../omniAndStore/apps/shell/`. It is the
+embedded React/shadcn Hub Shell, with Apps for all authenticated clients and Android-only Discover
+catalog routes. Shell is not a catalog application: it has no manifest, package, wrapper, registry
+identity, or separate hostname. The Android build produces and embeds its relative-asset bundle.
+The unauthenticated vanilla pairing page lives separately under
+`../omniAndStore/platform/pairing/` and only its required assets are available before approval.
+Messages, Permission Test, and every other installable application appear in Apps only after
+catalog installation.
 
 Every catalog Web app is installed as an Android wrapper APK. OmniAnd freshly validates the static
 catalog, resolves the selected package server-side, validates its ZIP,
@@ -149,14 +152,14 @@ outputs and the generated wrapper APK assets are outside the formatter targets.
 ## Validation
 
 ```sh
-node --check ../omniAndStore/platform/shell/app.js
+npm --prefix ../omniAndStore run check
 ./gradlew spotlessCheck :app:testDebugUnitTest assembleDebug
 ```
 
 On API 26 and API 35 devices, verify the launcher starts OmniAnd, each mobile URL uses the expected
 `.localhost:8080` authority, and `window.isSecureContext` is true. Confirm Messages works when
 Android grants the required role and permissions, while Permission test receives `403 Forbidden`.
-Verify Platform Home catalog operations, multipart uploads and cancellation, file selection, and multiple events over one SSE
+Verify Shell Discover catalog operations, multipart uploads and cancellation, file selection, and multiple events over one SSE
 connection. Disable Wi-Fi and mobile data and confirm loopback operation continues. Raw, cross-host,
 alternate-port, and non-loopback `.localhost` requests must receive `401`. For desktop testing,
 configure wildcard DNS and trusted TLS termination, open the configured canonical Home, request
@@ -164,7 +167,7 @@ access, and approve it on the phone. Confirm APIs return `401` before approval, 
 subdomains work afterward, denial never creates a session, and stopping OmniAnd requires pairing
 again.
 
-For wrapper validation, install an app from Platform Home's Available view, approve Android's package-installer flow, and verify that a launcher entry appears and that its Web files work offline through the canonical origin. Installing a newer catalog package should atomically update the same Android package and retain browser origin data.
+For wrapper validation, install an app from Shell's Discover tab, approve Android's package-installer flow, and verify that a launcher entry appears and that its Web files work offline through the canonical origin. Installing a newer catalog package should atomically update the same Android package and retain browser origin data.
 
 ## Security scope
 
