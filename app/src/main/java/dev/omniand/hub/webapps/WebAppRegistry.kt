@@ -20,17 +20,6 @@ data class WebApp(
 
 /** Discovers catalog applications exclusively from trusted, installed wrapper APKs. */
 object WebAppRegistry {
-    private val builtInApps =
-        listOf(
-            WebApp(
-                "store",
-                "Store",
-                BuildConfig.VERSION_NAME,
-                setOf("apps.install"),
-                assetRoot = "web/apps/store",
-                iconPath = "icon.png",
-            )
-        )
     private val validId = Regex("[a-z][a-z0-9-]{0,31}")
     private val knownCapabilities =
         setOf(
@@ -46,8 +35,7 @@ object WebAppRegistry {
 
     fun apps(context: Context): List<WebApp> {
         removeLegacyStorage(context)
-        return builtInApps +
-            (cached ?: synchronized(this) { cached ?: discover(context).also { cached = it } })
+        return cached ?: synchronized(this) { cached ?: discover(context).also { cached = it } }
     }
 
     fun invalidate() {

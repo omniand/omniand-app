@@ -16,6 +16,7 @@ import dev.omniand.hub.sms.SmsEventBroadcaster
 import dev.omniand.hub.sms.SmsNotifications
 import dev.omniand.hub.sms.SmsReadEventPublisher
 import dev.omniand.hub.sms.SmsSetupManager
+import dev.omniand.hub.webapps.SemanticVersion
 import dev.omniand.hub.webapps.StoreCatalog
 import dev.omniand.hub.webapps.WebApp
 import dev.omniand.hub.webapps.WebAppInstaller
@@ -167,6 +168,9 @@ object PlatformServer {
         capability: String,
     ) = PermissionManager.hasCapability(context, request.app?.id, capability)
 
+    internal fun canManageCatalog(request: PlatformRequestContext): Boolean =
+        request.phoneClient && request.app == null && request.hostname == "localhost"
+
     /** Serves only the bounded unauthenticated handshake on the configured canonical Home host. */
     private fun desktopPairingResponse(
         context: Context,
@@ -272,6 +276,7 @@ object PlatformServer {
         val app = request.app
         val host = request.hostname
         val isLocalWebView = request.phoneClient
+        val isLocalPlatformHome = canManageCatalog(request)
         if (path == "/api/media/setup" && method == "GET") {
             if (!hasMediaCapability(context, app))
                 return codedError(403, "missing-capability", "Missing Media capability")
@@ -537,44 +542,41 @@ object PlatformServer {
                 }
             }
         }
-        if (path == "/api/store/config" && method == "GET" && app?.id == "store") {
-            return json(
-                200,
-                JSONObject()
-                    .put("storeUrl", BuildConfig.STORE_URL)
-                    .put(
-                        "installedApps",
-                        JSONArray(
-                            WebAppRegistry.apps(context)
-                                .filter { it.packageName != null }
-                                .map { it.id }
-                        ),
-                    ),
-            )
+        if (path == "/api/apps/catalog" && method == "GET") {
+            if (!isLocalPlatformHome)
+                return codedError(403, "phone-local-required", "Catalog access is phone-local")
+            return catalogResponse(context)
         }
-        val installPrefix = "/api/apps/install/"
-        if (path.startsWith(installPrefix) && method == "POST") {
-            if (!PermissionManager.hasCapability(context, app?.id, "apps.install"))
-                return error(403, "Missing capability: apps.install")
-            if (!isLocalWebView)
-                return codedError(
-                    403,
-                    "phone-local-required",
-                    "Applications can only be installed from the phone",
-                )
+        val catalogIcon = Regex("^/api/apps/catalog/([^/]+)/icon$").matchEntire(path)
+        if (catalogIcon != null && method == "GET") {
+            if (!isLocalPlatformHome)
+                return codedError(403, "phone-local-required", "Catalog access is phone-local")
             return try {
-                WebAppInstaller.prepare(
-                        context,
-                        URLDecoder.decode(path.removePrefix(installPrefix), "UTF-8"),
-                    )
-                    .use { validated -> json(202, WrapperInstaller.install(context, validated)) }
+                val id = URLDecoder.decode(catalogIcon.groupValues[1], "UTF-8")
+                val selected =
+                    StoreCatalog.fetch().singleOrNull { it.id == id }
+                        ?: return error(404, "Catalog application not found")
+                PlatformContent("200 OK", "image/png", StoreCatalog.fetchIcon(selected))
             } catch (error: Exception) {
-                Log.w(TAG, "Web application installation rejected", error)
-                error(400, error.message ?: "Unable to install application")
+                Log.w(TAG, "Catalog icon rejected", error)
+                codedError(502, "catalog-unavailable", error.message ?: "Catalog unavailable")
             }
+        }
+        val catalogInstall = Regex("^/api/apps/catalog/([^/]+)/install$").matchEntire(path)
+        if (catalogInstall != null && method == "POST") {
+            if (!isLocalPlatformHome)
+                return codedError(403, "phone-local-required", "Installation is phone-local")
+            return installCatalogApp(
+                context,
+                URLDecoder.decode(catalogInstall.groupValues[1], "UTF-8"),
+                headers,
+                body,
+            )
         }
         val operationPrefix = "/api/apps/operations/"
         if (path.startsWith(operationPrefix) && method == "GET") {
+            if (!isLocalPlatformHome)
+                return codedError(403, "phone-local-required", "Operations are phone-local")
             val operationId = URLDecoder.decode(path.removePrefix(operationPrefix), "UTF-8")
             val operation =
                 dev.omniand.hub.wrappers.InstallOperations.get(context, operationId)
@@ -603,13 +605,6 @@ object PlatformServer {
                 }
             }
             return json(200, operation)
-        }
-        val uninstallPrefix = "/api/apps/uninstall/"
-        if (path.startsWith(uninstallPrefix) && method == "POST") {
-            if (!PermissionManager.hasCapability(context, app?.id, "apps.install"))
-                return error(403, "Missing capability: apps.install")
-            val id = URLDecoder.decode(path.removePrefix(uninstallPrefix), "UTF-8")
-            return removeWebApp(context, id, isLocalWebView)
         }
         if (WebAppRegistry.isPlatformHost(context, host)) {
             if (path == "/api/apps/web" && method == "GET") {
@@ -649,77 +644,6 @@ object PlatformServer {
                 return json(200, apps)
             }
             val integrationPrefix = "/api/apps/web/"
-            if (
-                path.startsWith(integrationPrefix) &&
-                    path.endsWith("/update") &&
-                    method in setOf("GET", "POST")
-            ) {
-                if (!isLocalWebView)
-                    return codedError(
-                        403,
-                        "phone-local-required",
-                        "Web applications can only be updated from the phone",
-                    )
-                val appId =
-                    URLDecoder.decode(
-                        path.removePrefix(integrationPrefix).removeSuffix("/update"),
-                        "UTF-8",
-                    )
-                val installedApp =
-                    WebAppRegistry.apps(context).firstOrNull {
-                        it.id == appId && it.packageName != null
-                    } ?: return error(404, "Updatable Web application not found")
-                return try {
-                    val update = StoreCatalog.check(installedApp)
-                    if (method == "GET") {
-                        json(
-                            200,
-                            JSONObject()
-                                .put("currentVersion", update.currentVersion)
-                                .put("available", update.available)
-                                .put("availableVersion", update.availableVersion ?: JSONObject.NULL)
-                                .put(
-                                    "addedCapabilities",
-                                    JSONArray(update.addedCapabilities.sorted()),
-                                ),
-                        )
-                    } else {
-                        val expectedVersion = requireJson(headers, body).requiredString("version")
-                        if (
-                            !update.available ||
-                                update.availableVersion != expectedVersion ||
-                                update.catalogApp == null
-                        ) {
-                            return codedError(
-                                409,
-                                "stale-update",
-                                "The selected update is no longer available",
-                            )
-                        }
-                        val selected = update.catalogApp
-                        WebAppInstaller.prepare(
-                                context,
-                                selected.packageUrl,
-                                WebAppInstaller.Expected(
-                                    selected.id,
-                                    selected.version,
-                                    selected.permissions,
-                                ),
-                            )
-                            .use { validated ->
-                                json(202, WrapperInstaller.install(context, validated))
-                            }
-                    }
-                } catch (error: Exception) {
-                    if (error is InvalidRequest) throw error
-                    Log.w(TAG, "Web application update failed", error)
-                    codedError(
-                        400,
-                        "update-failed",
-                        error.message ?: "Unable to update application",
-                    )
-                }
-            }
             if (path.startsWith(integrationPrefix) && path.endsWith("/icon") && method == "GET") {
                 val appId =
                     URLDecoder.decode(
@@ -1173,6 +1097,71 @@ object PlatformServer {
         }
     }
 
+    /** Returns display-only catalog metadata with installation state computed on every request. */
+    private fun catalogResponse(context: Context): PlatformContent =
+        try {
+            val installed = WebAppRegistry.apps(context).associateBy { it.id }
+            val entries =
+                JSONArray().apply {
+                    StoreCatalog.fetch().forEach { item ->
+                        val current = installed[item.id]
+                        val state = StoreCatalog.state(item.version, current?.version)
+                        put(
+                            JSONObject()
+                                .put("id", item.id)
+                                .put("name", item.name)
+                                .put("tagline", item.tagline)
+                                .put("version", item.version)
+                                .put("category", item.category)
+                                .put("permissions", JSONArray(item.permissions.sorted()))
+                                .put("icon", "/api/apps/catalog/${item.id}/icon")
+                                .put("installedVersion", current?.version ?: JSONObject.NULL)
+                                .put("state", state)
+                        )
+                    }
+                }
+            json(200, entries)
+        } catch (error: Exception) {
+            Log.w(TAG, "Catalog unavailable", error)
+            codedError(502, "catalog-unavailable", error.message ?: "Catalog unavailable")
+        }
+
+    /** Resolves the requested id/version from a fresh catalog before downloading its package. */
+    private fun installCatalogApp(
+        context: Context,
+        id: String,
+        headers: Map<String, String>,
+        body: ByteArray,
+    ): PlatformContent {
+        return try {
+            val version = requireJson(headers, body).requiredString("version")
+            val selected =
+                StoreCatalog.fetch().singleOrNull { it.id == id && it.version == version }
+                    ?: return codedError(
+                        409,
+                        "stale-catalog",
+                        "The selected version is no longer available",
+                    )
+            val installed = WebAppRegistry.apps(context).firstOrNull { it.id == id }
+            if (
+                installed != null &&
+                    SemanticVersion.compare(version, installed.version)?.let { it <= 0 } != false
+            )
+                return codedError(409, "version-not-newer", "The selected version is not newer")
+            WebAppInstaller.prepare(
+                    context,
+                    selected.packageUrl,
+                    WebAppInstaller.Expected(selected.id, selected.version, selected.permissions),
+                )
+                .use { validated -> json(202, WrapperInstaller.install(context, validated)) }
+        } catch (error: InvalidRequest) {
+            throw error
+        } catch (error: Exception) {
+            Log.w(TAG, "Catalog installation rejected", error)
+            codedError(400, "install-failed", error.message ?: "Unable to install application")
+        }
+    }
+
     private fun removeWebApp(
         context: Context,
         id: String,
@@ -1188,7 +1177,6 @@ object PlatformServer {
             val appToRemove =
                 WebAppRegistry.apps(context).firstOrNull { it.id == id }
                     ?: return error(404, "Web application not found")
-            check(appToRemove.id != "store") { "The system Store cannot be removed" }
             val operation =
                 dev.omniand.hub.wrappers.InstallOperations.create(context, id, "uninstall")
             WrapperInstaller.requestUninstall(context, appToRemove)
@@ -1297,6 +1285,7 @@ object PlatformServer {
             415 -> "415 Unsupported Media Type"
             416 -> "416 Range Not Satisfiable"
             429 -> "429 Too Many Requests"
+            502 -> "502 Bad Gateway"
             else -> "500 Internal Server Error"
         }
 

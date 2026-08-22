@@ -130,7 +130,7 @@ object WebAppInstaller {
 
     private fun requireAllowedOrigin(packageUrl: String) {
         val requested = URI(packageUrl)
-        val store = URI(BuildConfig.STORE_URL)
+        val store = URI(BuildConfig.CATALOG_URL)
         check(requested.scheme in setOf("http", "https")) { "Unsupported package URL" }
         check(requested.userInfo == null && requested.fragment == null) { "Invalid package URL" }
         check(

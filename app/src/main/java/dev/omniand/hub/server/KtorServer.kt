@@ -121,15 +121,13 @@ object KtorServer {
     }
 
     private fun Route.applicationRoutes(context: Context) {
-        get("/api/store/config") { call.forward(context) }
         route("/api/apps") {
-            post("/install/{package...}") { call.forward(context) }
+            get("/catalog") { call.forward(context) }
+            get("/catalog/{id}/icon") { call.forward(context) }
+            post("/catalog/{id}/install") { call.forward(context) }
             get("/operations/{id}") { call.forward(context) }
-            post("/uninstall/{id}") { call.forward(context) }
             get("/web") { call.forward(context) }
             get("/web/{id}/icon") { call.forward(context) }
-            get("/web/{id}/update") { call.forward(context) }
-            post("/web/{id}/update") { call.forward(context) }
             post("/web/{id}/uninstall") { call.forward(context) }
         }
     }

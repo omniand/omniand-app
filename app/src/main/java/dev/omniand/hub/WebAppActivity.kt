@@ -7,19 +7,14 @@ import android.os.Bundle
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
-import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import dev.omniand.hub.contacts.ContactsSetupManager
-import dev.omniand.hub.media.MediaSetupManager
 import dev.omniand.hub.sms.SmsNotifications
-import dev.omniand.hub.sms.SmsSetupManager
 import dev.omniand.hub.webapps.WebAppRegistry
 
 class WebAppActivity : Activity() {
     private lateinit var webView: WebView
     private var fileResult: ValueCallback<Array<Uri>>? = null
-    private var currentAppId: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -29,18 +24,12 @@ class WebAppActivity : Activity() {
             finish()
             return
         }
-        currentAppId = app.id
         title = app.name
         webView =
             WebView(this).apply {
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 settings.userAgentString = "${settings.userAgentString} OmniAndPlatform/1.0"
-                if (app.id == "store" && BuildConfig.STORE_URL.startsWith("http://")) {
-                    // The locally routed Store shell has an HTTPS origin, while the
-                    // development Vite catalog is intentionally served over HTTP.
-                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                }
                 webChromeClient =
                     object : WebChromeClient() {
                         override fun onShowFileChooser(
@@ -137,23 +126,6 @@ class WebAppActivity : Activity() {
         if (webView.canGoBack()) webView.goBack() else super.onBackPressed()
     }
 
-    override fun onResume() {
-        super.onResume()
-        if (currentAppId == "store") {
-            isStoreActive = true
-            if (
-                !MediaSetupManager.openPendingSetup(this) &&
-                    !ContactsSetupManager.openPendingSetup(this)
-            )
-                SmsSetupManager.openPendingSetup(this)
-        }
-    }
-
-    override fun onPause() {
-        if (currentAppId == "store") isStoreActive = false
-        super.onPause()
-    }
-
     override fun onDestroy() {
         if (::webView.isInitialized) webView.destroy()
         super.onDestroy()
@@ -170,10 +142,6 @@ class WebAppActivity : Activity() {
     }
 
     companion object {
-        @Volatile
-        var isStoreActive: Boolean = false
-            private set
-
         const val EXTRA_APP_ID = "appId"
         const val EXTRA_ROUTE = "route"
         const val EXTRA_THREAD_ID = "threadId"

@@ -42,15 +42,13 @@ app/src/main/
 
 ```text
 app/build/generated/embeddedWebAssets/
-└── web/                          # copied from ../omniAndStore at build time
-    ├── shell/
-    └── apps/store/
+└── web/shell/                    # copied from ../omniAndStore at build time
 ```
 
-The canonical Platform Home files live in `../omniAndStore/platform/shell/`. The built-in Store is
-authored in `../omniAndStore/apps/store/`, but Gradle runs its shared Vite build and embeds only
-`../omniAndStore/build/apps/store/`. Generated app output must never be edited directly. The HTTP
-server reads and serves the generated assets; the WebView must not load them with `file://` URLs.
+The canonical Platform Home files live in `../omniAndStore/platform/shell/`. It contains both the
+Installed launcher and the Android-only Available catalog. Gradle embeds only this vanilla Shell;
+the external catalog is static metadata, icons, and packages and has no Web UI. The HTTP server
+reads and serves generated assets; the WebView must not load them with `file://` URLs.
 
 The `wrappers/template/` Gradle application module is the generic Android wrapper template. It must
 not contain a prebuilt Web package or app-specific native logic. During installation the Platform
@@ -66,7 +64,6 @@ The pjoject uses separate hostnames on one port as separate Web origins:
 | `phone.example.org` | Shared Platform Home | Platform management APIs |
 | `messages.phone.example.org` | Messages | `sms.read` |
 | `test.phone.example.org` | Permission test | None |
-| `store.phone.example.org` | Store manager | `apps.install` |
 
 Do not replace this with path-based isolation. Paths on one host and port share an origin and are not a security boundary.
 
@@ -86,9 +83,9 @@ Do not replace this with path-based isolation. Paths on one host and port share 
 ## Adding a Web app
 
 1. Create the application only under `../omniAndStore/apps/<app-id>/`; never add catalog apps to
-   Platform assets. `apps/store/` is the special built-in Store and is excluded from catalog ZIPs.
+   Platform assets. `store` remains a reserved application ID.
 2. Add a small `manifest.json`, `index.html`, JavaScript/JSX under `src/`, optional CSS, and a PNG icon referenced by `"icon": "icon.png"`.
-3. Add the application to the Store catalog and regenerate its ZIP; installed packages are discovered from their manifests and the ID becomes the hostname label.
+3. Add the application to the catalog with its static PNG icon URL and regenerate its ZIP; installed packages are discovered from their manifests and the ID becomes the hostname label.
 4. Ensure its permissions are understood by `WebAppInstaller` and its generated CSP is restrictive.
 6. Grant only the capabilities the app requires.
 7. Ensure its frontend uses relative same-origin API URLs such as `fetch("/api/sms")`.
@@ -135,7 +132,7 @@ For the project, verify all of the following on an Android device or AVD:
 
 ## Scope control
 
-Preserve the existing Store/package installation path, SMS read/send/modify support, incoming-message handling, notifications, and generic wrapper generation. Do not add calls, cloud synchronization, remote Internet access, JavaScript compatibility layers, WebRTC, WebSockets, MMS completion, or advanced package management unless explicitly requested. Catalog Web packages are installed only as assets in their generated wrappers; do not also store private file-backed copies.
+Preserve Platform Home's server-resolved catalog/package installation path, SMS read/send/modify support, incoming-message handling, notifications, and generic wrapper generation. Do not add calls, cloud synchronization, remote Internet access, JavaScript compatibility layers, WebRTC, WebSockets, MMS completion, or advanced package management unless explicitly requested. Catalog Web packages are installed only as assets in their generated wrappers; do not also store private file-backed copies.
 
 OmniAnd is an actively developed, production-oriented platform. Describe limitations using their concrete security, deployment, feature, or validation status rather than applying a general maturity label.
 

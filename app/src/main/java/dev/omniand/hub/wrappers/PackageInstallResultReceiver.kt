@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
 import dev.omniand.hub.MainActivity
-import dev.omniand.hub.WebAppActivity
 import dev.omniand.hub.contacts.ContactsSetupManager
 import dev.omniand.hub.media.MediaSetupManager
 import dev.omniand.hub.sms.SmsSetupManager
@@ -21,7 +20,7 @@ class PackageInstallResultReceiver : BroadcastReceiver() {
             InstallOperations.update(context, operationId, "pending-user-action")
             @Suppress("DEPRECATION")
             val confirmation = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
-            if (confirmation != null && (MainActivity.isActive || WebAppActivity.isStoreActive)) {
+            if (confirmation != null && MainActivity.isActive) {
                 confirmation.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(confirmation)
             }

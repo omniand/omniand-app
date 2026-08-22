@@ -18,31 +18,7 @@ val bundleWrapperTemplate by
     }
 
 val webProject = rootProject.layout.projectDirectory.dir("../omniAndStore")
-val embeddedStoreSource = webProject.dir("build/apps/store")
 val platformShellSource = rootProject.layout.projectDirectory.dir("../omniAndStore/platform/shell")
-
-val installWebDependencies by
-    tasks.registering(Exec::class) {
-        workingDir(webProject)
-        inputs.files(webProject.file("package.json"), webProject.file("package-lock.json"))
-        outputs.file(webProject.file("node_modules/.package-lock.json"))
-        commandLine("npm", "ci")
-    }
-
-val buildEmbeddedStore by
-    tasks.registering(Exec::class) {
-        dependsOn(installWebDependencies)
-        workingDir(webProject)
-        inputs.dir(webProject.dir("apps/store"))
-        inputs.files(
-            webProject.file("package.json"),
-            webProject.file("package-lock.json"),
-            webProject.file("vite.app.config.js"),
-            webProject.file("scripts/app-vite.mjs"),
-        )
-        outputs.dir(embeddedStoreSource)
-        commandLine("npm", "run", "build:app", "--", "store")
-    }
 val platformHost =
     providers
         .gradleProperty("omniandPlatformHost")
@@ -64,16 +40,13 @@ check(
 
 val syncEmbeddedWeb by
     tasks.registering(Sync::class) {
-        dependsOn(buildEmbeddedStore)
-        inputs.dir(embeddedStoreSource)
         inputs.dir(platformShellSource)
-        from(embeddedStoreSource) { into("web/apps/store") }
-        from(platformShellSource) { into("web/shell") }
+        from(platformShellSource) {
+            exclude("*.test.js")
+            into("web/shell")
+        }
         into(layout.buildDirectory.dir("generated/embeddedWebAssets"))
         doFirst {
-            check(embeddedStoreSource.asFile.isDirectory) {
-                "Embedded Store source is missing at ${embeddedStoreSource.asFile}"
-            }
             check(platformShellSource.asFile.isDirectory) {
                 "Platform Home source is missing at ${platformShellSource.asFile}"
             }
@@ -91,7 +64,7 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         buildConfigField("String", "PLATFORM_HOST", "\"$platformHost\"")
-        buildConfigField("String", "STORE_URL", "\"http://192.168.1.11:5173/\"")
+        buildConfigField("String", "CATALOG_URL", "\"http://192.168.1.11:5173/\"")
     }
 
     buildFeatures { buildConfig = true }

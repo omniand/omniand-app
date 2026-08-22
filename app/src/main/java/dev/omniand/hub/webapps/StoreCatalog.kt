@@ -9,17 +9,13 @@ import org.json.JSONArray
 
 data class CatalogApp(
     val id: String,
+    val name: String,
+    val tagline: String,
     val version: String,
+    val category: String,
     val permissions: Set<String>,
     val packageUrl: String,
-)
-
-data class UpdateInfo(
-    val currentVersion: String,
-    val available: Boolean,
-    val availableVersion: String? = null,
-    val addedCapabilities: Set<String> = emptySet(),
-    val catalogApp: CatalogApp? = null,
+    val iconUrl: String,
 )
 
 object SemanticVersion {
@@ -86,82 +82,145 @@ object SemanticVersion {
     }
 }
 
+/** Fetches and strictly validates the external static catalog consumed only by Platform Home. */
 object StoreCatalog {
     internal const val MAX_CATALOG_BYTES = 256 * 1024
-
-    fun check(installed: WebApp, storeUrl: String = BuildConfig.STORE_URL): UpdateInfo {
-        check(installed.packageName != null) { "Built-in applications cannot be updated" }
-        val entries = fetch(storeUrl)
-        return findUpdate(installed, entries)
-    }
-
-    internal fun findUpdate(installed: WebApp, entries: List<CatalogApp>): UpdateInfo {
-        val entry =
-            entries.firstOrNull { it.id == installed.id }
-                ?: return UpdateInfo(installed.version, false)
-        val comparison = SemanticVersion.compare(entry.version, installed.version)
-        if (comparison == null || comparison <= 0) return UpdateInfo(installed.version, false)
-        return UpdateInfo(
-            installed.version,
-            true,
-            entry.version,
-            entry.permissions - installed.permissions,
-            entry,
+    internal const val MAX_ICON_BYTES = 512 * 1024
+    private val validId = Regex("[a-z][a-z0-9-]{0,31}")
+    private val knownCapabilities =
+        setOf(
+            "sms.read",
+            "sms.send",
+            "sms.modify",
+            "contacts.read",
+            "contacts.write",
+            "media.read",
+            "media.write",
         )
+
+    fun fetch(catalogUrl: String = BuildConfig.CATALOG_URL): List<CatalogApp> {
+        val bytes =
+            download(
+                URI(catalogUrl).resolve("catalog/apps.json"),
+                MAX_CATALOG_BYTES,
+                "application/json",
+            )
+        return parse(bytes, catalogUrl)
     }
 
-    internal fun parse(bytes: ByteArray, storeUrl: String): List<CatalogApp> {
-        check(bytes.size <= MAX_CATALOG_BYTES) { "Store catalog is too large" }
-        val base = URI(storeUrl)
-        check(base.scheme in setOf("http", "https") && base.host != null) {
-            "Invalid configured Store URL"
+    fun fetchIcon(app: CatalogApp, catalogUrl: String = BuildConfig.CATALOG_URL): ByteArray {
+        val configured = validateBase(catalogUrl)
+        val icon = URI(app.iconUrl)
+        check(sameOrigin(configured, icon)) { "Catalog icon has a foreign origin" }
+        val bytes = download(icon, MAX_ICON_BYTES, "image/png")
+        check(
+            bytes.size >= PNG_SIGNATURE.size &&
+                bytes.copyOfRange(0, PNG_SIGNATURE.size).contentEquals(PNG_SIGNATURE)
+        ) {
+            "Catalog icon is not a PNG"
         }
+        return bytes
+    }
+
+    internal fun state(catalogVersion: String, installedVersion: String?): String {
+        if (installedVersion == null) return "available"
+        val comparison = SemanticVersion.compare(catalogVersion, installedVersion)
+        return if (comparison != null && comparison > 0) "update-available" else "installed"
+    }
+
+    internal fun parse(bytes: ByteArray, catalogUrl: String): List<CatalogApp> {
+        check(bytes.size <= MAX_CATALOG_BYTES) { "Catalog is too large" }
+        val base = validateBase(catalogUrl)
         val catalog = JSONArray(bytes.toString(Charsets.UTF_8))
+        val ids = mutableSetOf<String>()
         return buildList {
             for (index in 0 until catalog.length()) {
                 val item = catalog.getJSONObject(index)
+                val id = item.getString("id")
+                val name = item.getString("name").trim()
+                val tagline = item.getString("tagline").trim()
+                val version = item.getString("version")
+                val category = item.getString("category").trim()
+                check(validId.matches(id) && id != "store") { "Invalid or reserved application id" }
+                check(ids.add(id)) { "Duplicate catalog application id" }
+                check(name.isNotEmpty() && name.length <= 80) { "Invalid application name" }
+                check(tagline.isNotEmpty() && tagline.length <= 160) {
+                    "Invalid application tagline"
+                }
+                check(category.isNotEmpty() && category.length <= 80) {
+                    "Invalid application category"
+                }
+                check(SemanticVersion.compare(version, version) == 0) {
+                    "Invalid application version"
+                }
                 val permissions = item.optJSONArray("permissions") ?: JSONArray()
-                val resolved = base.resolve(item.getString("packageUrl"))
-                check(sameOrigin(base, resolved)) { "Catalog package has a foreign origin" }
-                check(
-                    resolved.scheme in setOf("http", "https") &&
-                        resolved.userInfo == null &&
-                        resolved.fragment == null
-                ) {
-                    "Invalid catalog package URL"
+                val declared = buildSet {
+                    for (permissionIndex in 0 until permissions.length()) {
+                        val permission = permissions.getString(permissionIndex)
+                        check(permission in knownCapabilities) { "Unknown capability" }
+                        check(add(permission)) { "Duplicate capability" }
+                    }
+                }
+                val packageUri = validateResource(base, item.getString("packageUrl"), ".zip")
+                val iconUri = validateResource(base, item.getString("iconUrl"), ".png")
+                check(packageUri.path.endsWith("/$id-$version.zip")) {
+                    "Catalog package URL does not match its id and version"
+                }
+                check(iconUri.path.endsWith("/catalog/icons/$id.png")) {
+                    "Catalog icon URL does not match its id"
                 }
                 add(
                     CatalogApp(
-                        item.getString("id"),
-                        item.optString("version"),
-                        buildSet {
-                            for (permissionIndex in 0 until permissions.length()) add(
-                                permissions.getString(permissionIndex)
-                            )
-                        },
-                        resolved.toString(),
+                        id,
+                        name,
+                        tagline,
+                        version,
+                        category,
+                        declared,
+                        packageUri.toString(),
+                        iconUri.toString(),
                     )
                 )
             }
         }
     }
 
-    private fun fetch(storeUrl: String): List<CatalogApp> {
-        val catalogUrl = URI(storeUrl).resolve("catalog/apps.json").toURL()
-        val connection = catalogUrl.openConnection() as HttpURLConnection
+    private fun validateBase(url: String): URI =
+        URI(url).also {
+            check(it.scheme in setOf("http", "https") && it.host != null && it.userInfo == null) {
+                "Invalid configured catalog URL"
+            }
+        }
+
+    private fun validateResource(base: URI, value: String, suffix: String): URI =
+        base.resolve(value).also {
+            check(sameOrigin(base, it)) { "Catalog resource has a foreign origin" }
+            check(
+                it.userInfo == null &&
+                    it.fragment == null &&
+                    it.query == null &&
+                    it.path.endsWith(suffix)
+            ) {
+                "Invalid catalog resource URL"
+            }
+        }
+
+    /** Downloads one bounded static resource without redirects or content-type ambiguity. */
+    private fun download(uri: URI, limit: Int, acceptedType: String): ByteArray {
+        val connection = uri.toURL().openConnection() as HttpURLConnection
         connection.connectTimeout = 5_000
-        connection.readTimeout = 10_000
+        connection.readTimeout = 20_000
         connection.instanceFollowRedirects = false
-        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("Accept", acceptedType)
         try {
             check(connection.responseCode == HttpURLConnection.HTTP_OK) {
-                "Store returned HTTP ${connection.responseCode}"
+                "Catalog server returned HTTP ${connection.responseCode}"
             }
-            check(
-                connection.contentLengthLong < 0 ||
-                    connection.contentLengthLong <= MAX_CATALOG_BYTES
-            ) {
-                "Store catalog is too large"
+            check(connection.contentType?.substringBefore(';') == acceptedType) {
+                "Catalog resource has an invalid content type"
+            }
+            check(connection.contentLengthLong < 0 || connection.contentLengthLong <= limit) {
+                "Catalog resource is too large"
             }
             val output = ByteArrayOutputStream()
             connection.inputStream.use { input ->
@@ -169,13 +228,11 @@ object StoreCatalog {
                 while (true) {
                     val count = input.read(buffer)
                     if (count < 0) break
-                    check(output.size() + count <= MAX_CATALOG_BYTES) {
-                        "Store catalog is too large"
-                    }
+                    check(output.size() + count <= limit) { "Catalog resource is too large" }
                     output.write(buffer, 0, count)
                 }
             }
-            return parse(output.toByteArray(), storeUrl)
+            return output.toByteArray()
         } finally {
             connection.disconnect()
         }
@@ -192,4 +249,6 @@ object StoreCatalog {
             uri.scheme.equals("https", true) -> 443
             else -> 80
         }
+
+    private val PNG_SIGNATURE = byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)
 }

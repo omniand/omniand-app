@@ -1,6 +1,5 @@
 package dev.omniand.hub.server
 
-import dev.omniand.hub.BuildConfig
 import dev.omniand.hub.webapps.WebApp
 
 object CspBuilder {
@@ -23,7 +22,7 @@ object CspBuilder {
                 "style-src 'self' 'unsafe-inline'",
                 "img-src 'self' data:",
                 "connect-src 'self'",
-                if (app.id == "store") "frame-src ${BuildConfig.STORE_URL}" else "frame-src 'none'",
+                "frame-src 'none'",
                 "base-uri 'none'",
                 "form-action 'self'",
                 "object-src 'none'",

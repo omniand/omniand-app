@@ -41,16 +41,15 @@ remain unavailable to paired desktops.
 | `phone.example.org` | Shared Platform Home and management APIs | Lists and manages Web apps |
 | `messages.phone.example.org` | Messages | `sms.read`, `sms.send`, `sms.modify` |
 | `test.phone.example.org` | Permission test | None |
-| `store.phone.example.org` | Store manager | `apps.install` |
 
-The canonical Platform Home Web source lives in `../omniAndStore/platform/shell/`, and the built-in
-Store source lives in `../omniAndStore/apps/store/`. The Android build copies both into generated APK
-assets, keeping HTML, CSS, and JavaScript out of the Platform source tree. The Store remains a
-built-in app and is not emitted as a catalog ZIP. Messages, Permission test, and every other
-application live in `../omniAndStore/` and appear on the Platform Home only after Store
-installation. Store-installed ZIP packages are stored by OmniAnd and served from their own origins.
+The canonical Platform Home Web source lives in `../omniAndStore/platform/shell/`. Its Installed
+view is available to Android and paired desktop browsers; its Android-only Available view lists and
+installs the external catalog. The Android build embeds only this Shell. Messages, Permission Test,
+and every other application live in `../omniAndStore/` and appear in Installed only after catalog
+installation.
 
-Every catalog Web app is installed as an Android wrapper APK. OmniAnd validates the Store ZIP,
+Every catalog Web app is installed as an Android wrapper APK. OmniAnd freshly validates the static
+catalog, resolves the selected package server-side, validates its ZIP,
 injects it under `assets/webapp/`, assigns the stable package name derived from the app ID, signs the
 APK on the phone, and starts Android's confirmed installer. The wrapper launcher delegates to
 OmniAnd's generic `WebAppActivity`; OmniAnd serves the wrapper's assets over the canonical app HTTP
@@ -86,7 +85,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 Open **OmniAnd** from the user's normal Android launcher. Installing an application that declares SMS capabilities starts or defers the required Android role and permission setup. Declining setup leaves the Web application installed, and Messages reports actionable API errors when a required permission or role is missing.
 
-The development Store URL is configured with `STORE_URL` in `app/build.gradle.kts`. Its current HTTP value is intended only for trusted local development. Use HTTPS for desktop embedding and production-like testing.
+The development catalog URL is configured with `CATALOG_URL` in `app/build.gradle.kts`. Its current HTTP value is intended only for trusted local development; production-like deployments should use HTTPS.
 
 ## Desktop development proxy
 
@@ -151,14 +150,13 @@ outputs and the generated wrapper APK assets are outside the formatter targets.
 
 ```sh
 node --check ../omniAndStore/platform/shell/app.js
-node --check ../omniAndStore/apps/store/app.js
 ./gradlew spotlessCheck :app:testDebugUnitTest assembleDebug
 ```
 
 On API 26 and API 35 devices, verify the launcher starts OmniAnd, each mobile URL uses the expected
 `.localhost:8080` authority, and `window.isSecureContext` is true. Confirm Messages works when
 Android grants the required role and permissions, while Permission test receives `403 Forbidden`.
-Verify Store operations, multipart uploads and cancellation, file selection, and multiple events over one SSE
+Verify Platform Home catalog operations, multipart uploads and cancellation, file selection, and multiple events over one SSE
 connection. Disable Wi-Fi and mobile data and confirm loopback operation continues. Raw, cross-host,
 alternate-port, and non-loopback `.localhost` requests must receive `401`. For desktop testing,
 configure wildcard DNS and trusted TLS termination, open the configured canonical Home, request
@@ -166,7 +164,7 @@ access, and approve it on the phone. Confirm APIs return `401` before approval, 
 subdomains work afterward, denial never creates a session, and stopping OmniAnd requires pairing
 again.
 
-For wrapper validation, install an app from the phone Store, approve Android's package-installer flow, and verify that a launcher entry appears and that its Web files work offline through the canonical origin. Installing a newer catalog package should atomically update the same Android package and retain browser origin data.
+For wrapper validation, install an app from Platform Home's Available view, approve Android's package-installer flow, and verify that a launcher entry appears and that its Web files work offline through the canonical origin. Installing a newer catalog package should atomically update the same Android package and retain browser origin data.
 
 ## Security scope
 

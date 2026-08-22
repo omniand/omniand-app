@@ -26,7 +26,8 @@ class KtorRoutingTest {
                 "/api/media/a%2Fb/content",
                 "/api/sms/messages/a%2Fb",
                 "/api/apps/web",
-                "/api/store/config",
+                "/api/apps/catalog",
+                "/api/apps/catalog/messages/icon",
             )
             .forEach { path ->
                 val response = client.get(path) { header(HttpHeaders.Host, "localhost:8080") }
@@ -36,6 +37,18 @@ class KtorRoutingTest {
         assertEquals(
             HttpStatusCode.NotFound,
             client.get("/api/unknown") { header(HttpHeaders.Host, "localhost:8080") }.status,
+        )
+        assertEquals(
+            HttpStatusCode.NotFound,
+            client.get("/api/store/config") { header(HttpHeaders.Host, "localhost:8080") }.status,
+        )
+        assertEquals(
+            HttpStatusCode.NotFound,
+            client
+                .post("/api/apps/install/https%3A%2F%2Fevil.example%2Fapp.zip") {
+                    header(HttpHeaders.Host, "localhost:8080")
+                }
+                .status,
         )
     }
 
