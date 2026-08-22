@@ -17,8 +17,32 @@ val bundleWrapperTemplate by
         rename { "template.apk" }
     }
 
-val embeddedStoreSource = rootProject.layout.projectDirectory.dir("../omniAndStore/apps/store")
+val webProject = rootProject.layout.projectDirectory.dir("../omniAndStore")
+val embeddedStoreSource = webProject.dir("build/apps/store")
 val platformShellSource = rootProject.layout.projectDirectory.dir("../omniAndStore/platform/shell")
+
+val installWebDependencies by
+    tasks.registering(Exec::class) {
+        workingDir(webProject)
+        inputs.files(webProject.file("package.json"), webProject.file("package-lock.json"))
+        outputs.file(webProject.file("node_modules/.package-lock.json"))
+        commandLine("npm", "ci")
+    }
+
+val buildEmbeddedStore by
+    tasks.registering(Exec::class) {
+        dependsOn(installWebDependencies)
+        workingDir(webProject)
+        inputs.dir(webProject.dir("apps/store"))
+        inputs.files(
+            webProject.file("package.json"),
+            webProject.file("package-lock.json"),
+            webProject.file("vite.app.config.js"),
+            webProject.file("scripts/app-vite.mjs"),
+        )
+        outputs.dir(embeddedStoreSource)
+        commandLine("npm", "run", "build:app", "--", "store")
+    }
 val platformHost =
     providers
         .gradleProperty("omniandPlatformHost")
@@ -40,6 +64,7 @@ check(
 
 val syncEmbeddedWeb by
     tasks.registering(Sync::class) {
+        dependsOn(buildEmbeddedStore)
         inputs.dir(embeddedStoreSource)
         inputs.dir(platformShellSource)
         from(embeddedStoreSource) { into("web/apps/store") }

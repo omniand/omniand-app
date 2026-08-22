@@ -47,10 +47,10 @@ app/build/generated/embeddedWebAssets/
     └── apps/store/
 ```
 
-The canonical Web files live in `../omniAndStore/platform/shell/` and
-`../omniAndStore/apps/store/`. Gradle copies them into generated Android assets and packages them
-into the APK. The HTTP server reads and serves those assets; the WebView must not load them with
-`file://` URLs.
+The canonical Platform Home files live in `../omniAndStore/platform/shell/`. The built-in Store is
+authored in `../omniAndStore/apps/store/`, but Gradle runs its shared Vite build and embeds only
+`../omniAndStore/build/apps/store/`. Generated app output must never be edited directly. The HTTP
+server reads and serves the generated assets; the WebView must not load them with `file://` URLs.
 
 The `wrappers/template/` Gradle application module is the generic Android wrapper template. It must
 not contain a prebuilt Web package or app-specific native logic. During installation the Platform
@@ -87,13 +87,13 @@ Do not replace this with path-based isolation. Paths on one host and port share 
 
 1. Create the application only under `../omniAndStore/apps/<app-id>/`; never add catalog apps to
    Platform assets. `apps/store/` is the special built-in Store and is excluded from catalog ZIPs.
-2. Add a small `manifest.json`, `index.html`, JavaScript, optional CSS, and a PNG icon referenced by `"icon": "icon.png"`.
+2. Add a small `manifest.json`, `index.html`, JavaScript/JSX under `src/`, optional CSS, and a PNG icon referenced by `"icon": "icon.png"`.
 3. Add the application to the Store catalog and regenerate its ZIP; installed packages are discovered from their manifests and the ID becomes the hostname label.
 4. Ensure its permissions are understood by `WebAppInstaller` and its generated CSP is restrictive.
 6. Grant only the capabilities the app requires.
 7. Ensure its frontend uses relative same-origin API URLs such as `fetch("/api/sms")`.
 
-Avoid frontend frameworks or build pipelines unless they materially simplify a requested feature. The current apps should run directly from their source assets.
+Use the shared Vite/React/Vitest project in `../omniAndStore`; do not add a per-app package or lockfile.
 
 ## Android development
 
