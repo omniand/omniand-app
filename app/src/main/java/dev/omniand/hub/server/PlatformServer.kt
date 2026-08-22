@@ -701,9 +701,20 @@ object PlatformServer {
                 request.authority,
             )
         if (WebAppRegistry.isPlatformHost(context, host))
-            return staticAsset(context, "web/shell", path, null, isLocalWebView, host)
+            return staticAsset(
+                context,
+                "web/shell",
+                platformShellAssetPath(path),
+                null,
+                isLocalWebView,
+                host,
+            )
         return error(404, "Unknown application origin")
     }
+
+    /** Resolves client-owned Shell routes to the embedded SPA entry document. */
+    internal fun platformShellAssetPath(path: String): String =
+        if (path == "/discover" || path.matches(Regex("^/discover/[^/]+$"))) "/" else path
 
     private fun sms(context: Context, app: WebApp?): PlatformContent {
         return sms(context, app) { it.recent() }
