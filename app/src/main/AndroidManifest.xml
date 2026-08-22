@@ -49,6 +49,11 @@
             android:name=".WebAppActivity"
             android:configChanges="keyboardHidden|orientation|screenSize"
             android:exported="true" />
+        <!-- Keep wrappers generated before the hub package rename launchable. -->
+        <activity-alias
+            android:name="dev.omniand.launcher.WebAppActivity"
+            android:exported="true"
+            android:targetActivity=".WebAppActivity" />
         <activity
             android:name=".DesktopPairingApprovalActivity"
             android:exported="false" />

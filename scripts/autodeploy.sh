@@ -5,7 +5,7 @@ set -o pipefail
 
 readonly PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly APK="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
-readonly ACTIVITY="dev.omniand.launcher/.MainActivity"
+readonly ACTIVITY="dev.omniand.launcher/dev.omniand.hub.MainActivity"
 
 for command in adb java inotifywait; do
   if ! command -v "$command" >/dev/null 2>&1; then

@@ -22,7 +22,7 @@ Web applications should remain ordinary HTML, CSS, and JavaScript applications u
 ```text
 app/src/main/
 ├── AndroidManifest.xml
-├── java/dev/omniand/launcher/
+├── java/dev/omniand/hub/
 │   ├── MainActivity.kt
 │   ├── WebAppActivity.kt
 │   ├── permissions/

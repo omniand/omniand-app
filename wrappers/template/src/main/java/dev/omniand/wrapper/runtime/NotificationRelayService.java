@@ -133,7 +133,7 @@ public final class NotificationRelayService extends Service {
                                     CHANNEL, "Messages", NotificationManager.IMPORTANCE_HIGH));
         Intent click =
                 new Intent()
-                        .setClassName("dev.omniand.launcher", "dev.omniand.launcher.WebAppActivity")
+                        .setClassName("dev.omniand.launcher", "dev.omniand.hub.WebAppActivity")
                         .putExtra("appId", appId)
                         .putExtra("route", "#/thread?id=" + thread)
                         .putExtra("threadId", thread);

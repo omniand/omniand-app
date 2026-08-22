@@ -56,7 +56,7 @@ val syncEmbeddedWeb by
     }
 
 android {
-    namespace = "dev.omniand.launcher"
+    namespace = "dev.omniand.hub"
     compileSdk = 35
 
     defaultConfig {
