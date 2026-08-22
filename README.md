@@ -82,6 +82,50 @@ Open **OmniAnd** from the user's normal Android launcher. Installing an applicat
 
 The development Store URL is configured with `STORE_URL` in `app/build.gradle.kts`. Its current HTTP value is intended only for trusted local development. Use HTTPS for desktop embedding and production-like testing.
 
+## Desktop development proxy
+
+The repository includes a variable-driven Caddy proxy in [`compose.yaml`](compose.yaml). Its
+Caddyfile and example environment contain no private material; `.env` and `.tls/` are ignored.
+
+Create the local configuration and export the same values for Gradle:
+
+```sh
+cp .env.example .env
+set -a
+. ./.env
+set +a
+```
+
+Generate and trust a development certificate on the desktop:
+
+```sh
+mkcert -install
+mkdir -p "$OMNIAND_CERT_DIR"
+mkcert \
+  -cert-file "$OMNIAND_CERT_DIR/$OMNIAND_CERT_FILE" \
+  -key-file "$OMNIAND_CERT_DIR/$OMNIAND_KEY_FILE" \
+  "$OMNIAND_PLATFORM_HOST" \
+  "*.$OMNIAND_PLATFORM_HOST"
+chmod 600 "$OMNIAND_CERT_DIR/$OMNIAND_KEY_FILE"
+```
+
+Build with that domain, forward an emulator, and start the proxy:
+
+```sh
+./gradlew assembleDebug
+adb -s emulator-5554 forward tcp:18080 tcp:8080
+docker compose up -d
+```
+
+`OMNIAND_BACKEND` defaults to the host's ADB-forwarded `127.0.0.1:18080`. Set it to a reachable
+phone address such as `192.0.2.10:8080` when using a physical device. The Compose service uses host
+networking, so do not add published ports. Inspect or stop it with:
+
+```sh
+docker compose logs -f desktop-proxy
+docker compose down
+```
+
 ## Formatting
 
 Spotless pins the repository formatters and applies the shared UTF-8, LF, final-newline, and

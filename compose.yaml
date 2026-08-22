@@ -1,0 +1,20 @@
+services:
+  desktop-proxy:
+    image: ${CADDY_IMAGE:-caddy:2-alpine}
+    container_name: omniand-desktop-proxy
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      OMNIAND_PLATFORM_HOST: ${OMNIAND_PLATFORM_HOST:?Copy .env.example to .env}
+      OMNIAND_BACKEND: ${OMNIAND_BACKEND:-127.0.0.1:18080}
+      OMNIAND_CERT_FILE: ${OMNIAND_CERT_FILE:-omniand.pem}
+      OMNIAND_KEY_FILE: ${OMNIAND_KEY_FILE:-omniand-key.pem}
+    volumes:
+      - ./caddy:/etc/caddy:ro
+      - ${OMNIAND_CERT_DIR:-./.tls}:/certs:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
