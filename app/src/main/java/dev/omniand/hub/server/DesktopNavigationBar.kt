@@ -14,14 +14,23 @@ object DesktopNavigationBar {
 
     fun inject(document: ByteArray, appName: String, platformOrigin: String): ByteArray {
         val html = document.toString(Charsets.UTF_8)
+        val headEnd = Regex("</head\\s*>", RegexOption.IGNORE_CASE).find(html)
+        val documentWithFavicon =
+            if (headEnd == null) html
+            else
+                html
+                    .substring(0, headEnd.range.first)
+                    .plus("<link rel=\"icon\" type=\"image/png\" href=\"/favicon.ico\" />")
+                    .plus(html.substring(headEnd.range.first))
         val bodyStart =
-            Regex("<body(?:\\s[^>]*)?>", RegexOption.IGNORE_CASE).find(html) ?: return document
+            Regex("<body(?:\\s[^>]*)?>", RegexOption.IGNORE_CASE).find(documentWithFavicon)
+                ?: return document
         val insertionPoint = bodyStart.range.last + 1
         val bar = markup(escape(appName), escape(platformOrigin))
-        return html
+        return documentWithFavicon
             .substring(0, insertionPoint)
             .plus(bar)
-            .plus(html.substring(insertionPoint))
+            .plus(documentWithFavicon.substring(insertionPoint))
             .toByteArray()
     }
 

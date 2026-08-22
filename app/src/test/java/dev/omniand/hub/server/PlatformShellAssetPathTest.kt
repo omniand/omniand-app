@@ -19,4 +19,12 @@ class PlatformShellAssetPathTest {
             PlatformServer.platformShellAssetPath("/discover/messages/extra"),
         )
     }
+
+    @Test
+    fun `standard favicon path resolves to the built Hub icon`() {
+        assertEquals(
+            "/assets/hub-icon.png",
+            PlatformServer.platformShellAssetPath("/favicon.ico"),
+        )
+    }
 }

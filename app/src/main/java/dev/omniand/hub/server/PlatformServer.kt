@@ -292,6 +292,11 @@ object PlatformServer {
         val host = request.hostname
         val isLocalWebView = request.phoneClient
         val isLocalPlatformHome = canManageCatalog(request)
+        if (path == "/favicon.ico" && method == "GET" && app != null) {
+            val icon = readAppIcon(context, app)
+            return if (icon != null) PlatformContent("200 OK", "image/png", icon)
+            else error(404, "Application icon not found")
+        }
         if (
             path == DesktopNavigationBar.SCRIPT_PATH &&
                 method == "GET" &&
@@ -753,7 +758,11 @@ object PlatformServer {
 
     /** Resolves client-owned Shell routes to the embedded SPA entry document. */
     internal fun platformShellAssetPath(path: String): String =
-        if (path == "/discover" || path.matches(Regex("^/discover/[^/]+$"))) "/" else path
+        when {
+            path == "/favicon.ico" -> "/assets/hub-icon.png"
+            path == "/discover" || path.matches(Regex("^/discover/[^/]+$")) -> "/"
+            else -> path
+        }
 
     private fun sms(context: Context, app: WebApp?): PlatformContent {
         return sms(context, app) { it.recent() }

@@ -21,12 +21,16 @@ class DesktopNavigationBarTest {
     fun injectsBackAndHomeControlsAfterBodyTag() {
         val result =
             DesktopNavigationBar.inject(
-                    "<!doctype html><body class=\"app\"><main>Messages</main></body>".toByteArray(),
+                    "<!doctype html><head><title>Messages</title></head><body class=\"app\"><main>Messages</main></body>"
+                        .toByteArray(),
                     "Messages",
                     "https://phone.example.org/",
                 )
                 .toString(Charsets.UTF_8)
 
+        assertTrue(
+            result.contains("<link rel=\"icon\" type=\"image/png\" href=\"/favicon.ico\" />")
+        )
         assertTrue(result.contains("<body class=\"app\"><style"))
         assertTrue(result.contains("href=\"https://phone.example.org/\""))
         assertTrue(result.contains("data-omniand-back"))
