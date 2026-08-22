@@ -19,8 +19,6 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import dev.omniand.launcher.contacts.ContactsSetupManager
 import dev.omniand.launcher.media.MediaSetupManager
-import dev.omniand.launcher.server.LocalOriginRouter
-import dev.omniand.launcher.server.PlatformServer
 import dev.omniand.launcher.sms.SmsNotifications
 import dev.omniand.launcher.sms.SmsSetupManager
 import dev.omniand.launcher.webapps.WebAppRegistry
@@ -32,7 +30,6 @@ class WebAppActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        PlatformServer.start(applicationContext)
         val appId = intent.getStringExtra(EXTRA_APP_ID)
         val app = WebAppRegistry.apps(this).firstOrNull { it.id == appId }
         if (app == null) {
@@ -108,16 +105,32 @@ class WebAppActivity : Activity() {
                                     )
                                 return true
                             }
-                            return false
+                            if (
+                                uri.scheme == "http" &&
+                                    uri.port == 8080 &&
+                                    uri.host == "${app.id}.localhost"
+                            )
+                                return false
+                            val targetApp =
+                                uri.host
+                                    ?.takeIf { uri.scheme == "http" && uri.port == 8080 }
+                                    ?.removeSuffix(".localhost")
+                                    ?.let { id ->
+                                        WebAppRegistry.apps(applicationContext).firstOrNull {
+                                            it.id == id
+                                        }
+                                    }
+                            if (targetApp != null) {
+                                startActivity(
+                                    Intent(this@WebAppActivity, WebAppActivity::class.java)
+                                        .putExtra(EXTRA_APP_ID, targetApp.id)
+                                )
+                            } else {
+                                runCatching { startActivity(Intent(Intent.ACTION_VIEW, uri)) }
+                            }
+                            return true
                         }
-
-                        override fun shouldInterceptRequest(
-                            view: WebView,
-                            request: WebResourceRequest,
-                        ) = LocalOriginRouter.intercept(applicationContext, request)
                     }
-                val route = intent.getStringExtra(EXTRA_ROUTE)?.takeIf(::validRoute).orEmpty()
-                loadUrl(WebAppRegistry.originFor(app) + route)
             }
         if (intent.getBooleanExtra(EXTRA_ANDROID_INTEGRATION, false)) {
             setContentView(webView)
@@ -143,6 +156,8 @@ class WebAppActivity : Activity() {
                 }
             )
         }
+        val route = intent.getStringExtra(EXTRA_ROUTE)?.takeIf(::validRoute).orEmpty()
+        LocalWebViewBootstrap.load(this, webView, "${app.id}.localhost", route)
         if (app.id == "messages")
             intent.getStringExtra(EXTRA_THREAD_ID)?.let { SmsNotifications.cancelThread(this, it) }
     }

@@ -12,12 +12,11 @@ import io.ktor.server.request.receiveChannel
 import io.ktor.server.request.uri
 import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondOutputStream
-import io.ktor.server.routing.get
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import io.ktor.util.cio.toByteArray
 
-/** Adapts network HTTP calls to the same host-aware router used by local Android WebViews. */
+/** Adapts HTTP calls to the host-aware router after transport authentication. */
 object KtorServer {
     fun start(context: Context) {
         embeddedServer(CIO, host = "0.0.0.0", port = PlatformServer.PORT) {
@@ -29,11 +28,6 @@ object KtorServer {
     /** Enforces transport limits before passing normalized request data to the Platform router. */
     private fun Application.platformModule(context: Context) {
         routing {
-            get("/api/sms") {
-                call.respondPlatform(
-                    PlatformServer.smsListResponse(context, call.request.platformHost())
-                )
-            }
             route("/{remaining...}") {
                 handle {
                     val body = call.receiveLimitedBody() ?: return@handle
@@ -42,9 +36,10 @@ object KtorServer {
                             context,
                             call.request.httpMethod.value,
                             call.request.uri,
-                            call.request.platformHost(),
+                            call.request.headers["Host"].orEmpty(),
                             call.request.platformHeaders(),
                             body,
+                            call.request.local.remoteAddress,
                         )
                     )
                 }
@@ -73,9 +68,6 @@ object KtorServer {
         )
         return null
     }
-
-    private fun io.ktor.server.request.ApplicationRequest.platformHost(): String =
-        headers["Host"]?.substringBefore(':') ?: "127.0.0.1"
 
     private fun io.ktor.server.request.ApplicationRequest.platformHeaders(): Map<String, String> =
         headers.entries().associate { (name, values) ->

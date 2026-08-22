@@ -50,6 +50,9 @@
             android:configChanges="keyboardHidden|orientation|screenSize"
             android:exported="true" />
         <activity
+            android:name=".DesktopPairingApprovalActivity"
+            android:exported="false" />
+        <activity
             android:name=".sms.SmsSetupActivity"
             android:exported="false" />
         <activity

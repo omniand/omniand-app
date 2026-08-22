@@ -9,8 +9,6 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import dev.omniand.launcher.contacts.ContactsSetupManager
 import dev.omniand.launcher.media.MediaSetupManager
-import dev.omniand.launcher.server.LocalOriginRouter
-import dev.omniand.launcher.server.PlatformServer
 import dev.omniand.launcher.sms.SmsSetupManager
 import dev.omniand.launcher.webapps.WebAppRegistry
 
@@ -19,8 +17,6 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        PlatformServer.start(applicationContext)
-
         webView =
             WebView(this).apply {
                 settings.javaScriptEnabled = true
@@ -33,26 +29,33 @@ class MainActivity : Activity() {
                             request: WebResourceRequest,
                         ): Boolean {
                             if (!request.isForMainFrame) return false
+                            val uri = request.url
+                            if (uri.scheme == "http" && uri.port == 8080 && uri.host == "localhost")
+                                return false
                             val app =
-                                request.url.host?.let {
-                                    WebAppRegistry.byHost(applicationContext, it)
-                                } ?: return false
-                            startActivity(
-                                Intent(this@MainActivity, WebAppActivity::class.java)
-                                    .putExtra(WebAppActivity.EXTRA_APP_ID, app.id)
-                            )
+                                uri.host
+                                    ?.takeIf { uri.scheme == "http" && uri.port == 8080 }
+                                    ?.removeSuffix(".localhost")
+                                    ?.let { id ->
+                                        WebAppRegistry.apps(applicationContext).firstOrNull {
+                                            it.id == id
+                                        }
+                                    }
+                            if (app != null) {
+                                startActivity(
+                                    Intent(this@MainActivity, WebAppActivity::class.java)
+                                        .putExtra(WebAppActivity.EXTRA_APP_ID, app.id)
+                                )
+                            } else {
+                                runCatching { startActivity(Intent(Intent.ACTION_VIEW, uri)) }
+                            }
                             return true
                         }
-
-                        override fun shouldInterceptRequest(
-                            view: WebView,
-                            request: WebResourceRequest,
-                        ) = LocalOriginRouter.intercept(applicationContext, request)
                     }
                 webChromeClient = WebChromeClient()
-                loadUrl("https://${BuildConfig.PLATFORM_HOST}/")
             }
         setContentView(webView)
+        LocalWebViewBootstrap.load(this, webView, "localhost")
 
         openPendingSetup()
     }
@@ -65,8 +68,10 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         isActive = true
+        activeInstance = this
         WebAppRegistry.invalidate()
         openPendingSetup()
+        DesktopPairingNotifications.showPending(this)
         if (::webView.isInitialized) {
             webView.post {
                 webView.evaluateJavascript(
@@ -79,10 +84,12 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         isActive = false
+        if (activeInstance === this) activeInstance = null
         super.onPause()
     }
 
     override fun onDestroy() {
+        if (activeInstance === this) activeInstance = null
         webView.destroy()
         super.onDestroy()
     }
@@ -96,6 +103,10 @@ class MainActivity : Activity() {
     companion object {
         @Volatile
         var isActive: Boolean = false
+            private set
+
+        @Volatile
+        internal var activeInstance: MainActivity? = null
             private set
     }
 }

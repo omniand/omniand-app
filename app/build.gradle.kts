@@ -19,6 +19,25 @@ val bundleWrapperTemplate by
 
 val embeddedStoreSource = rootProject.layout.projectDirectory.dir("../omniAndStore/apps/store")
 val platformShellSource = rootProject.layout.projectDirectory.dir("../omniAndStore/platform/shell")
+val platformHost =
+    providers
+        .gradleProperty("omniandPlatformHost")
+        .orElse(providers.environmentVariable("OMNIAND_PLATFORM_HOST"))
+        .orElse("phone.example.org")
+        .get()
+        .lowercase()
+
+check(
+    platformHost.length <= 253 &&
+        platformHost.matches(
+            Regex(
+                "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+"
+            )
+        )
+) {
+    "omniandPlatformHost must be a lowercase DNS hostname"
+}
+
 val syncEmbeddedWeb by
     tasks.registering(Sync::class) {
         inputs.dir(embeddedStoreSource)
@@ -46,7 +65,7 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
-        buildConfigField("String", "PLATFORM_HOST", "\"phone.example.org\"")
+        buildConfigField("String", "PLATFORM_HOST", "\"$platformHost\"")
         buildConfigField("String", "STORE_URL", "\"http://192.168.1.11:5173/\"")
     }
 

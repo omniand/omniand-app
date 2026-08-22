@@ -57,9 +57,16 @@ object WebAppRegistry {
     fun byHost(context: Context, host: String): WebApp? =
         apps(context).firstOrNull { host.substringBefore('.').equals(it.id, ignoreCase = true) }
 
+    fun byCanonicalHost(context: Context, host: String): WebApp? =
+        apps(context).firstOrNull {
+            host.equals("${it.id}.${BuildConfig.PLATFORM_HOST}", ignoreCase = true)
+        }
+
     fun isPlatformHost(context: Context, host: String): Boolean = byHost(context, host) == null
 
     fun originFor(app: WebApp): String = "https://${app.id}.${BuildConfig.PLATFORM_HOST}"
+
+    fun localhostOriginFor(app: WebApp): String = "http://${app.id}.localhost:8080"
 
     fun developmentOriginFor(app: WebApp, baseHost: String, port: Int): String =
         "http://${app.id}.${baseHost.lowercase()}:$port"

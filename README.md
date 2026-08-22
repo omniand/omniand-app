@@ -6,11 +6,29 @@ The current implementation status and remaining engineering work are tracked in 
 
 ## Architecture
 
-The canonical Platform Home is `https://phone.example.org/`. Every Web app has a distinct canonical origin such as `https://messages.phone.example.org/`.
+Desktop clients retain the canonical Platform Home at `https://phone.example.org/` and distinct app
+origins such as `https://messages.phone.example.org/`. OmniAnd-created Android WebViews instead use
+`http://localhost:8080/` for Home and `http://<app-id>.localhost:8080/` for applications.
 
-On Android, `LocalOriginRouter` intercepts those canonical HTTPS URLs inside platform WebViews and dispatches them directly to `PlatformServer`. This preserves origins and works without DNS or network access. The Platform Home opens apps in the generic `WebAppActivity`.
+Android WebViews reach Ktor over the loopback socket; there is no request interception or native
+JavaScript bridge. Before navigation, OmniAnd starts the server and installs an HTTP-only,
+same-site, exact-host session cookie derived from a process-lifetime secret. The server accepts a
+`.localhost` request only from a loopback socket, on port 8080, for Home or an installed app host,
+and with that host's credential. Unsafe API methods additionally require the exact matching
+`Origin`. Restarting OmniAnd invalidates old credentials.
 
-For desktop access, wildcard DNS must point the canonical hostnames at the phone. The embedded server currently listens on cleartext HTTP port 8080, so a trusted TLS reverse proxy must terminate HTTPS and forward requests with their original `Host` header. The cleartext listener must not be exposed to an untrusted network.
+For desktop access, wildcard DNS must point the configured canonical hostname and its subdomains at
+the phone. The embedded server listens on cleartext HTTP port 8080, so a trusted TLS reverse proxy
+must terminate HTTPS and preserve the original `Host` header. The cleartext listener must not be
+exposed to an untrusted network.
+
+An unknown desktop receives a pairing page. Requesting access displays an Android notification, or
+an approval dialog directly when OmniAnd is foregrounded. The phone owner reviews the socket peer
+and browser description and explicitly allows or denies it. Approval installs an HttpOnly, Secure,
+SameSite session cookie for the configured base domain; it authenticates that browser across the
+Platform and app subdomains only until the browser session or OmniAnd process ends. Pairing requests
+expire after two minutes and are rate-limited. Phone-only setup and package-management operations
+remain unavailable to paired desktops.
 
 | Canonical host | Role | Capabilities |
 |---|---|---|
@@ -30,7 +48,8 @@ Every catalog Web app is installed as an Android wrapper APK. OmniAnd validates 
 injects it under `assets/webapp/`, assigns the stable package name derived from the app ID, signs the
 APK on the phone, and starts Android's confirmed installer. The wrapper launcher delegates to
 OmniAnd's generic `WebAppActivity`; OmniAnd serves the wrapper's assets over the canonical app HTTP
-origin and remains the capability provider.
+origin and remains the capability provider. Existing installed packages may still navigate legacy
+canonical Messages links; OmniAnd opens those in the authenticated Messages WebView.
 
 Messages uses the capability-gated `GET /api/sms/events` endpoint for live invalidations. A client with `sms.read` receives `text/event-stream` `sms-change` events after incoming persistence, final outgoing delivery changes, and successful read/unread mutations, then reloads authoritative SMS resources. Read events identify either `messageId` or `threadId`. Events are process-local and are not replayed. TLS reverse proxies must preserve the `Host` header, disable response buffering and compression/transformation for this endpoint, keep streaming connections open, and use idle timeouts longer than the 15-second heartbeat interval.
 
@@ -48,6 +67,11 @@ the result to the newest 100 records.
 ## Build and install
 
 Requirements are JDK 17 or 21 and Android SDK 35.
+
+The canonical desktop domain defaults to `phone.example.org`. Configure it at build time with
+either `-PomniandPlatformHost=phone.your-domain.example` or the
+`OMNIAND_PLATFORM_HOST=phone.your-domain.example` environment variable. The value must be a DNS
+hostname with at least two labels; configure the same base and wildcard names in DNS and TLS.
 
 ```sh
 ./gradlew assembleDebug
@@ -81,10 +105,24 @@ node --check ../omniAndStore/apps/store/app.js
 ./gradlew spotlessCheck :app:testDebugUnitTest assembleDebug
 ```
 
-On a device, verify that the normal launcher starts OmniAnd; Messages can read, receive, send, update, and delete SMS when the required Android role and permissions are granted; and Permission test receives `403 Forbidden`. Disable networking and confirm Android still loads all canonical platform origins. For desktop testing, configure wildcard DNS and trusted TLS termination before opening `https://phone.example.org/`.
+On API 26 and API 35 devices, verify the launcher starts OmniAnd, each mobile URL uses the expected
+`.localhost:8080` authority, and `window.isSecureContext` is true. Confirm Messages works when
+Android grants the required role and permissions, while Permission test receives `403 Forbidden`.
+Verify Store operations, binary uploads, file selection, and multiple events over one SSE
+connection. Disable Wi-Fi and mobile data and confirm loopback operation continues. Raw, cross-host,
+alternate-port, and non-loopback `.localhost` requests must receive `401`. For desktop testing,
+configure wildcard DNS and trusted TLS termination, open the configured canonical Home, request
+access, and approve it on the phone. Confirm APIs return `401` before approval, Platform and app
+subdomains work afterward, denial never creates a session, and stopping OmniAnd requires pairing
+again.
 
 For wrapper validation, install an app from the phone Store, approve Android's package-installer flow, and verify that a launcher entry appears and that its Web files work offline through the canonical origin. Installing a newer catalog package should atomically update the same Android package and retain browser origin data.
 
 ## Security scope
 
-Host identity, `PermissionManager`, Android runtime permission checks, and server-generated CSP are all required. CORS is not authorization. Generated wrappers are signed, but downloaded Web packages are not yet cryptographically verified. There is not yet app authentication or embedded LAN TLS; keep port 8080 on a trusted development network only.
+Authenticated phone-client identity, exact host identity, `PermissionManager`, Android runtime
+permission checks, and server-generated CSP are all required. CSP includes `form-action 'self'`,
+CORS remains denied by default, and third-party WebView cookies are disabled. Desktop traffic
+requires a separately approved, process-lifetime session; Host identity alone never authorizes it.
+Generated wrappers are signed, but downloaded Web packages are not yet cryptographically verified.
+There is no embedded LAN TLS; keep port 8080 on a trusted development network only.

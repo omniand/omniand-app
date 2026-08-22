@@ -3,6 +3,7 @@ package dev.omniand.launcher.server
 import android.content.Context
 import android.util.Log
 import dev.omniand.launcher.BuildConfig
+import dev.omniand.launcher.DesktopPairingNotifications
 import dev.omniand.launcher.contacts.ContactsEventBroadcaster
 import dev.omniand.launcher.contacts.ContactsSetupManager
 import dev.omniand.launcher.media.MediaEventBroadcaster
@@ -39,15 +40,21 @@ object PlatformServer {
     const val PORT = 8080
     private val started = AtomicBoolean(false)
 
-    fun start(context: Context) {
-        if (!started.compareAndSet(false, true)) return
+    @Synchronized
+    fun start(context: Context): Boolean {
+        if (started.get()) return true
         val appContext = context.applicationContext
-        ContactsEventBroadcaster.start(appContext)
-        MediaEventBroadcaster.start(appContext)
-        runCatching { KtorServer.start(appContext) }
-            .onFailure {
+        return runCatching {
+                KtorServer.start(appContext)
+                ContactsEventBroadcaster.start(appContext)
+                MediaEventBroadcaster.start(appContext)
+                started.set(true)
+                true
+            }
+            .getOrElse {
                 started.set(false)
                 Log.e(TAG, "Ktor server failed to start", it)
+                false
             }
     }
 
@@ -55,54 +62,206 @@ object PlatformServer {
         context: Context,
         method: String,
         path: String,
-        host: String,
+        authority: String,
         headers: Map<String, String>,
         body: ByteArray,
-    ): Response =
-        route(
+        peerAddress: String,
+    ): Response {
+        val normalizedHeaders = headers.mapKeys { it.key.lowercase() }
+        val requestPath = path.substringBefore('?')
+        val requestContext =
+            authenticateRequest(
+                context.applicationContext,
+                authority,
+                peerAddress,
+                method,
+                requestPath,
+                normalizedHeaders,
+            )
+                ?: return desktopPairingResponse(
+                    context.applicationContext,
+                    method,
+                    requestPath,
+                    authority,
+                    peerAddress,
+                    normalizedHeaders,
+                ) ?: codedError(401, "authentication-required", "Unauthorized")
+        return route(
             context.applicationContext,
             method,
-            path.substringBefore('?'),
+            requestPath,
             parseQuery(path.substringAfter('?', "")),
-            host.lowercase(),
-            isLocalWebView = false,
-            headers.mapKeys { it.key.lowercase() },
+            requestContext,
+            normalizedHeaders,
             body,
         )
+    }
 
-    fun localResponse(
+    /** Authenticates localhost before deriving the app identity used by capability checks. */
+    private fun authenticateRequest(
+        context: Context,
+        authority: String,
+        peerAddress: String,
+        method: String,
+        path: String,
+        headers: Map<String, String>,
+    ): PlatformRequestContext? {
+        val parsed = parseAuthority(authority) ?: return null
+        val hostname = parsed.first
+        val port = parsed.second
+        val localhost = hostname == "localhost" || hostname.endsWith(".localhost")
+        if (!localhost) {
+            val app = WebAppRegistry.byCanonicalHost(context, hostname)
+            if (
+                (hostname != BuildConfig.PLATFORM_HOST && app == null) ||
+                    port !in setOf(null, 443) ||
+                    !DesktopPairing.verify(headers["cookie"])
+            )
+                return null
+            if (
+                path.startsWith("/api/") &&
+                    method.uppercase() in setOf("POST", "PUT", "PATCH", "DELETE") &&
+                    headers["origin"] != "https://$hostname"
+            )
+                return null
+            return PlatformRequestContext(
+                authority.lowercase(),
+                hostname,
+                PlatformRequestContext.Transport.DESKTOP_HTTP,
+                false,
+                app,
+            )
+        }
+        if (port != PORT || !LocalSessionAuthenticator.isLoopback(peerAddress)) return null
+        val app =
+            if (hostname == "localhost") null
+            else
+                WebAppRegistry.apps(context).firstOrNull { "${it.id}.localhost" == hostname }
+                    ?: return null
+        if (!LocalSessionAuthenticator.verify(hostname, headers["cookie"])) return null
+        if (
+            path.startsWith("/api/") &&
+                method.uppercase() in setOf("POST", "PUT", "PATCH", "DELETE") &&
+                headers["origin"] != "http://${authority.lowercase()}"
+        )
+            return null
+        return PlatformRequestContext(
+            authority.lowercase(),
+            hostname,
+            PlatformRequestContext.Transport.LOOPBACK_HTTP,
+            true,
+            app,
+        )
+    }
+
+    /** Serves only the bounded unauthenticated handshake on the configured canonical Home host. */
+    private fun desktopPairingResponse(
         context: Context,
         method: String,
         path: String,
-        host: String,
-        headers: Map<String, String> = emptyMap(),
-    ): Response =
-        route(
-            context.applicationContext,
-            method,
-            path.substringBefore('?'),
-            parseQuery(path.substringAfter('?', "")),
-            host.lowercase(),
-            isLocalWebView = true,
-            headers.mapKeys { it.key.lowercase() },
-            byteArrayOf(),
+        authority: String,
+        peerAddress: String,
+        headers: Map<String, String>,
+    ): Response? {
+        val parsed = parseAuthority(authority) ?: return null
+        val hostname = parsed.first
+        val canonicalApp = WebAppRegistry.byCanonicalHost(context, hostname)
+        if (
+            (hostname != BuildConfig.PLATFORM_HOST && canonicalApp == null) ||
+                parsed.second !in setOf(null, 443)
         )
+            return null
+        if (method == "GET" && path in setOf("/", "/pairing.js", "/pairing.css")) {
+            val relative = if (path == "/") "pairing.html" else path.removePrefix("/")
+            val bytes = context.assets.open("web/shell/$relative").use { it.readBytes() }
+            return Response(
+                "200 OK",
+                mime(relative),
+                bytes,
+                CspBuilder.buildPairing(),
+            )
+        }
+        if (path == "/api/pairing/request" && method == "POST") {
+            if (headers["origin"] != "https://$hostname") return null
+            val request =
+                DesktopPairing.requestId(headers["cookie"])?.let(DesktopPairing::pending)
+                    ?: try {
+                        DesktopPairing.create(peerAddress, headers["user-agent"].orEmpty())
+                    } catch (_: DesktopPairing.Throttled) {
+                        return codedError(429, "pairing-rate-limited", "Try again later")
+                    }
+            DesktopPairingNotifications.publish(context, request)
+            return Response.bytes(
+                "202 Accepted",
+                "application/json; charset=utf-8",
+                JSONObject().put("pending", true).toString().toByteArray(),
+                mapOf(
+                    "Set-Cookie" to
+                        "${DesktopPairing.REQUEST_COOKIE}=${request.id}; Path=/api/pairing; " +
+                            "HttpOnly; Secure; SameSite=Strict"
+                ),
+            )
+        }
+        if (path == "/api/pairing/status" && method == "GET") {
+            val id =
+                DesktopPairing.requestId(headers["cookie"])
+                    ?: return codedError(400, "pairing-request-missing", "Pairing request missing")
+            val claim = DesktopPairing.claim(id)
+            val body = JSONObject().put("status", claim.decision.name.lowercase())
+            val responseHeaders =
+                claim.token?.let {
+                    mapOf(
+                        "Set-Cookie" to
+                            "${DesktopPairing.SESSION_COOKIE}=$it; Domain=${BuildConfig.PLATFORM_HOST}; " +
+                                "Path=/; HttpOnly; Secure; SameSite=Strict"
+                    )
+                } ?: emptyMap()
+            return Response.bytes(
+                "200 OK",
+                "application/json; charset=utf-8",
+                body.toString().toByteArray(),
+                responseHeaders,
+            )
+        }
+        return null
+    }
+
+    internal fun parseAuthority(authority: String): Pair<String, Int?>? {
+        val value = authority.trim().lowercase()
+        if (value.isEmpty() || value.contains('/') || value.contains('@')) return null
+        if (value.startsWith('[')) {
+            val end = value.indexOf(']')
+            if (end < 0) return null
+            val suffix = value.substring(end + 1)
+            if (suffix.isNotEmpty() && !suffix.startsWith(':')) return null
+            val port = suffix.removePrefix(":").takeIf { it.isNotEmpty() }
+            if (port != null && port.toIntOrNull() == null) return null
+            return value.substring(1, end) to port?.toInt()
+        }
+        if (value.count { it == ':' } > 1) return null
+        val hostname = value.substringBefore(':')
+        if (hostname.isEmpty()) return null
+        val rawPort = value.substringAfter(':', "")
+        if (rawPort.isNotEmpty() && rawPort.toIntOrNull() == null) return null
+        return hostname to rawPort.takeIf { it.isNotEmpty() }?.toInt()
+    }
 
     private fun route(
         context: Context,
         method: String,
         path: String,
         query: Map<String, String>,
-        host: String,
-        isLocalWebView: Boolean,
+        request: PlatformRequestContext,
         headers: Map<String, String>,
         body: ByteArray,
     ): Response {
-        val app = WebAppRegistry.byHost(context, host)
+        val app = request.app
+        val host = request.hostname
+        val isLocalWebView = request.phoneClient
         if (path == "/api/media/setup" && method == "GET") {
             if (!hasMediaCapability(context, app))
                 return codedError(403, "missing-capability", "Missing Media capability")
-            return json(200, MediaSetupManager.state(context, isLocalWebView))
+            return json(200, MediaSetupManager.state(context, localTransport = false))
         }
         if (path == "/api/media/setup/request" && method == "POST") {
             if (!hasMediaCapability(context, app))
@@ -122,7 +281,7 @@ object PlatformServer {
             return Response.stream(
                 "200 OK",
                 "text/event-stream; charset=utf-8",
-                { MediaEventBroadcaster.subscribe(isLocalWebView) },
+                { MediaEventBroadcaster.subscribe(closeAfterEvent = false) },
                 mapOf("Cache-Control" to "no-cache, no-transform", "X-Accel-Buffering" to "no"),
             )
         }
@@ -217,7 +376,7 @@ object PlatformServer {
             return Response.stream(
                 "200 OK",
                 "text/event-stream; charset=utf-8",
-                { ContactsEventBroadcaster.subscribe(isLocalWebView) },
+                { ContactsEventBroadcaster.subscribe(closeAfterEvent = false) },
                 mapOf("Cache-Control" to "no-cache, no-transform", "X-Accel-Buffering" to "no"),
             )
         }
@@ -316,14 +475,14 @@ object PlatformServer {
             SmsSetupManager.request(context, app?.permissions.orEmpty())
             return json(200, JSONObject().put("opened", true))
         }
-        if (path == "/api/sms" && method == "GET") return smsListResponse(context, host)
+        if (path == "/api/sms" && method == "GET") return sms(context, app)
         if (path == "/api/sms/events" && method == "GET") {
             if (!PermissionManager.hasCapability(context, app?.id, "sms.read"))
                 return error(403, "Missing capability: sms.read")
             return Response.stream(
                 "200 OK",
                 "text/event-stream; charset=utf-8",
-                { SmsEventBroadcaster.subscribe(closeAfterEvent = isLocalWebView) },
+                { SmsEventBroadcaster.subscribe(closeAfterEvent = false) },
                 mapOf("Cache-Control" to "no-cache, no-transform", "X-Accel-Buffering" to "no"),
             )
         }
@@ -360,8 +519,12 @@ object PlatformServer {
                             id,
                             requiredUploadHeader(headers, "x-omniand-upload-index").toIntOrNull()
                                 ?: throw MmsUploadStore.Invalid("invalid-upload-chunk"),
-                            Base64.getDecoder()
-                                .decode(requiredUploadHeader(headers, "x-omniand-upload-chunk")),
+                            if (body.isNotEmpty()) body
+                            else
+                                Base64.getDecoder()
+                                    .decode(
+                                        requiredUploadHeader(headers, "x-omniand-upload-chunk")
+                                    ),
                         )
                 }
             }
@@ -546,10 +709,17 @@ object PlatformServer {
                                     .put("updatable", item.packageName != null)
                                     .put(
                                         "origin",
-                                        if (!isLocalWebView) {
-                                            WebAppRegistry.developmentOriginFor(item, host, PORT)
-                                        } else {
-                                            WebAppRegistry.originFor(item)
+                                        when {
+                                            isLocalWebView ->
+                                                WebAppRegistry.localhostOriginFor(item)
+                                            host == BuildConfig.PLATFORM_HOST ->
+                                                WebAppRegistry.originFor(item)
+                                            else ->
+                                                WebAppRegistry.developmentOriginFor(
+                                                    item,
+                                                    host,
+                                                    PORT,
+                                                )
                                         },
                                     )
                                     .put(
@@ -676,7 +846,7 @@ object PlatformServer {
                 path,
                 app,
                 isLocalWebView,
-                headers["host"] ?: host,
+                request.authority,
             )
         if (app?.packageName != null)
             return staticPackageAsset(
@@ -684,7 +854,7 @@ object PlatformServer {
                 app,
                 path,
                 isLocalWebView,
-                headers["host"] ?: host,
+                request.authority,
             )
         if (WebAppRegistry.isPlatformHost(context, host))
             return staticAsset(context, "web/shell", path, null, isLocalWebView, host)
@@ -693,11 +863,6 @@ object PlatformServer {
 
     private fun sms(context: Context, app: WebApp?): Response {
         return sms(context, app) { it.recent() }
-    }
-
-    /** Serves the legacy SMS collection through both Ktor and direct WebView routing. */
-    internal fun smsListResponse(context: Context, host: String): Response {
-        return sms(context.applicationContext, WebAppRegistry.byHost(context, host.lowercase()))
     }
 
     private fun smsPart(
@@ -1181,12 +1346,14 @@ object PlatformServer {
             202 -> "202 Accepted"
             206 -> "206 Partial Content"
             400 -> "400 Bad Request"
+            401 -> "401 Unauthorized"
             403 -> "403 Forbidden"
             404 -> "404 Not Found"
             409 -> "409 Conflict"
             501 -> "501 Not Implemented"
             413 -> "413 Payload Too Large"
             416 -> "416 Range Not Satisfiable"
+            429 -> "429 Too Many Requests"
             else -> "500 Internal Server Error"
         }
 
