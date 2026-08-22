@@ -49,7 +49,10 @@ object MediaSetupManager {
             .orEmpty()
 
     /** Reports Android authorization independently from the Web capability decision. */
-    fun state(context: Context, localTransport: Boolean = false): JSONObject {
+    fun state(
+        context: Context,
+        @Suppress("UNUSED_PARAMETER") localTransport: Boolean = false,
+    ): JSONObject {
         val images = granted(context, imagePermission())
         val videos = granted(context, videoPermission())
         val selected =
@@ -68,8 +71,6 @@ object MediaSetupManager {
                     .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                     .getBoolean(PENDING, false),
             )
-            .put("uploadTransport", if (localTransport) "base64-header" else "binary-body")
-            .put("chunkSize", if (localTransport) 24 * 1024 else 256 * 1024)
             .put("maxFiles", 20)
             .put("maxFileSize", 500L * 1024 * 1024)
     }

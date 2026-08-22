@@ -8,12 +8,10 @@ import dev.omniand.hub.contacts.ContactsEventBroadcaster
 import dev.omniand.hub.contacts.ContactsSetupManager
 import dev.omniand.hub.media.MediaEventBroadcaster
 import dev.omniand.hub.media.MediaSetupManager
-import dev.omniand.hub.media.MediaUploadStore
 import dev.omniand.hub.permissions.PermissionManager
 import dev.omniand.hub.services.ContactsService
 import dev.omniand.hub.services.MediaService
 import dev.omniand.hub.services.SmsService
-import dev.omniand.hub.sms.MmsUploadStore
 import dev.omniand.hub.sms.SmsEventBroadcaster
 import dev.omniand.hub.sms.SmsNotifications
 import dev.omniand.hub.sms.SmsReadEventPublisher
@@ -23,8 +21,13 @@ import dev.omniand.hub.webapps.WebApp
 import dev.omniand.hub.webapps.WebAppInstaller
 import dev.omniand.hub.webapps.WebAppRegistry
 import dev.omniand.hub.wrappers.WrapperInstaller
+import io.ktor.http.ContentType
+import io.ktor.http.Headers
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.OutgoingContent
+import io.ktor.utils.io.ByteWriteChannel
+import io.ktor.utils.io.writeFully
 import java.net.URLDecoder
-import java.util.Base64
 import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONArray
 import org.json.JSONObject
@@ -66,12 +69,12 @@ object PlatformServer {
         headers: Map<String, String>,
         body: ByteArray,
         peerAddress: String,
-    ): Response {
+    ): PlatformContent {
         val normalizedHeaders = headers.mapKeys { it.key.lowercase() }
         val requestPath = path.substringBefore('?')
         val requestContext =
             authenticateRequest(
-                context.applicationContext,
+                context,
                 authority,
                 peerAddress,
                 method,
@@ -79,26 +82,30 @@ object PlatformServer {
                 normalizedHeaders,
             )
                 ?: return desktopPairingResponse(
-                    context.applicationContext,
+                    context,
                     method,
                     requestPath,
                     authority,
                     peerAddress,
                     normalizedHeaders,
                 ) ?: codedError(401, "authentication-required", "Unauthorized")
-        return route(
-            context.applicationContext,
-            method,
-            requestPath,
-            parseQuery(path.substringAfter('?', "")),
-            requestContext,
-            normalizedHeaders,
-            body,
-        )
+        return try {
+            route(
+                context,
+                method,
+                requestPath,
+                parseQuery(path.substringAfter('?', "")),
+                requestContext,
+                normalizedHeaders,
+                body,
+            )
+        } catch (error: InvalidRequest) {
+            codedError(error.status, error.code, error.message ?: "Invalid request")
+        }
     }
 
     /** Authenticates localhost before deriving the app identity used by capability checks. */
-    private fun authenticateRequest(
+    internal fun authenticateRequest(
         context: Context,
         authority: String,
         peerAddress: String,
@@ -154,6 +161,12 @@ object PlatformServer {
         )
     }
 
+    internal fun hasCapability(
+        context: Context,
+        request: PlatformRequestContext,
+        capability: String,
+    ) = PermissionManager.hasCapability(context, request.app?.id, capability)
+
     /** Serves only the bounded unauthenticated handshake on the configured canonical Home host. */
     private fun desktopPairingResponse(
         context: Context,
@@ -162,9 +175,10 @@ object PlatformServer {
         authority: String,
         peerAddress: String,
         headers: Map<String, String>,
-    ): Response? {
+    ): PlatformContent? {
         val parsed = parseAuthority(authority) ?: return null
         val hostname = parsed.first
+        if (hostname == "localhost" || hostname.endsWith(".localhost")) return null
         val canonicalApp = WebAppRegistry.byCanonicalHost(context, hostname)
         if (
             (hostname != BuildConfig.PLATFORM_HOST && canonicalApp == null) ||
@@ -174,7 +188,7 @@ object PlatformServer {
         if (method == "GET" && path in setOf("/", "/pairing.js", "/pairing.css")) {
             val relative = if (path == "/") "pairing.html" else path.removePrefix("/")
             val bytes = context.assets.open("web/shell/$relative").use { it.readBytes() }
-            return Response(
+            return PlatformContent(
                 "200 OK",
                 mime(relative),
                 bytes,
@@ -191,7 +205,7 @@ object PlatformServer {
                         return codedError(429, "pairing-rate-limited", "Try again later")
                     }
             DesktopPairingNotifications.publish(context, request)
-            return Response.bytes(
+            return PlatformContent.bytes(
                 "202 Accepted",
                 "application/json; charset=utf-8",
                 JSONObject().put("pending", true).toString().toByteArray(),
@@ -216,7 +230,7 @@ object PlatformServer {
                                 "Path=/; HttpOnly; Secure; SameSite=Strict"
                     )
                 } ?: emptyMap()
-            return Response.bytes(
+            return PlatformContent.bytes(
                 "200 OK",
                 "application/json; charset=utf-8",
                 body.toString().toByteArray(),
@@ -254,7 +268,7 @@ object PlatformServer {
         request: PlatformRequestContext,
         headers: Map<String, String>,
         body: ByteArray,
-    ): Response {
+    ): PlatformContent {
         val app = request.app
         val host = request.hostname
         val isLocalWebView = request.phoneClient
@@ -278,7 +292,7 @@ object PlatformServer {
         if (path == "/api/media/events" && method == "GET") {
             if (!PermissionManager.hasCapability(context, app?.id, "media.read"))
                 return codedError(403, "missing-capability", "Missing capability: media.read")
-            return Response.stream(
+            return PlatformContent.stream(
                 "200 OK",
                 "text/event-stream; charset=utf-8",
                 { MediaEventBroadcaster.subscribe(closeAfterEvent = false) },
@@ -297,51 +311,8 @@ object PlatformServer {
             if (!PermissionManager.hasCapability(context, app?.id, "media.write"))
                 return codedError(403, "missing-capability", "Missing capability: media.write")
             return mediaOperation {
-                val ids = JSONArray(decodedHeader(headers, "x-omniand-media-ids", 32 * 1024))
+                val ids = requireJson(headers, body).requiredStringArray("ids")
                 MediaService(context).delete(List(ids.length()) { ids.getString(it) })
-            }
-        }
-        if (path == "/api/media/uploads" && method == "POST") {
-            if (!PermissionManager.hasCapability(context, app?.id, "media.write"))
-                return codedError(403, "missing-capability", "Missing capability: media.write")
-            return mediaUpload {
-                MediaUploadStore(context)
-                    .create(
-                        app!!.id,
-                        decodedHeader(headers, "x-omniand-upload-name", 512),
-                        decodedHeader(headers, "x-omniand-upload-type", 256),
-                        requiredHeader(headers, "x-omniand-upload-size").toLongOrNull()
-                            ?: throw MediaUploadStore.Invalid("invalid-upload"),
-                        requiredHeader(headers, "x-omniand-upload-sha256"),
-                    )
-            }
-        }
-        val mediaUpload =
-            Regex("^/api/media/uploads/([^/]+)(?:/(complete|abort))?$").matchEntire(path)
-        if (mediaUpload != null && method == "POST") {
-            if (!PermissionManager.hasCapability(context, app?.id, "media.write"))
-                return codedError(403, "missing-capability", "Missing capability: media.write")
-            return mediaUpload {
-                val store = MediaUploadStore(context)
-                val id = mediaUpload.groupValues[1]
-                when (mediaUpload.groupValues[2]) {
-                    "complete" -> store.complete(app!!.id, id)
-                    "abort" -> store.abort(app!!.id, id)
-                    else -> {
-                        val bytes =
-                            if (body.isNotEmpty()) body
-                            else
-                                Base64.getDecoder()
-                                    .decode(requiredHeader(headers, "x-omniand-upload-chunk"))
-                        store.append(
-                            app!!.id,
-                            id,
-                            requiredHeader(headers, "x-omniand-upload-offset").toLongOrNull()
-                                ?: throw MediaUploadStore.Invalid("invalid-upload-chunk"),
-                            bytes,
-                        )
-                    }
-                }
             }
         }
         val mediaResource = Regex("^/api/media/([^/]+)(?:/(thumbnail|content))?$").matchEntire(path)
@@ -373,7 +344,7 @@ object PlatformServer {
         if (path == "/api/contacts/events" && method == "GET") {
             if (!PermissionManager.hasCapability(context, app?.id, "contacts.read"))
                 return codedError(403, "missing-capability", "Missing capability: contacts.read")
-            return Response.stream(
+            return PlatformContent.stream(
                 "200 OK",
                 "text/event-stream; charset=utf-8",
                 { ContactsEventBroadcaster.subscribe(closeAfterEvent = false) },
@@ -392,17 +363,11 @@ object PlatformServer {
             return contactsRead(context, app) { it.accounts() }
         if (path == "/api/contacts/matches" && method == "POST")
             return contactsRead(context, app) {
-                it.match(
-                    JSONArray(
-                        decodedHeader(headers, "x-omniand-contacts-numbers", MAX_CONTACT_JSON)
-                    )
-                )
+                it.match(requireJson(headers, body).requiredStringArray("numbers"))
             }
         if (path == "/api/contacts" && method == "POST")
             return contactsWrite(context, app) {
-                it.create(
-                    JSONObject(decodedHeader(headers, "x-omniand-contacts-data", MAX_CONTACT_JSON))
-                )
+                it.create(requireJson(headers, body))
             }
         val contactPhoto = Regex("^/api/contacts/([^/]+)/photo$").matchEntire(path)
         if (contactPhoto != null && method == "GET")
@@ -413,18 +378,13 @@ object PlatformServer {
             )
         if (contactPhoto != null && method in setOf("PUT", "DELETE"))
             return contactsWrite(context, app) {
-                val bytes =
-                    if (method == "DELETE") null
-                    else
-                        Base64.getDecoder()
-                            .decode(
-                                decodedHeader(headers, "x-omniand-contacts-photo", MAX_PHOTO_HEADER)
-                            )
+                val bytes = if (method == "DELETE") null else requireJpeg(headers, body)
                 if (bytes != null && bytes.size > MAX_CONTACT_PHOTO)
                     throw ContactsService.InvalidInput()
                 it.setPhoto(
                     URLDecoder.decode(contactPhoto.groupValues[1], "UTF-8"),
-                    decodedHeader(headers, "x-omniand-contacts-source", 256),
+                    query["source"]?.takeIf { it.isNotBlank() && it.length <= 256 }
+                        ?: throw InvalidRequest(400, "invalid-request", "source is required"),
                     requireIfMatch(headers),
                     bytes,
                 )
@@ -436,11 +396,12 @@ object PlatformServer {
             }
         if (contactPath != null && method == "PUT")
             return contactsWrite(context, app) {
+                val document = requireJson(headers, body)
                 it.update(
                     URLDecoder.decode(contactPath.groupValues[1], "UTF-8"),
-                    decodedHeader(headers, "x-omniand-contacts-source", 256),
+                    document.requiredString("source", 256),
                     requireIfMatch(headers),
-                    JSONObject(decodedHeader(headers, "x-omniand-contacts-data", MAX_CONTACT_JSON)),
+                    document.requiredObject("data"),
                 )
             }
         if (contactPath != null && method == "DELETE")
@@ -479,7 +440,7 @@ object PlatformServer {
         if (path == "/api/sms/events" && method == "GET") {
             if (!PermissionManager.hasCapability(context, app?.id, "sms.read"))
                 return error(403, "Missing capability: sms.read")
-            return Response.stream(
+            return PlatformContent.stream(
                 "200 OK",
                 "text/event-stream; charset=utf-8",
                 { SmsEventBroadcaster.subscribe(closeAfterEvent = false) },
@@ -488,62 +449,15 @@ object PlatformServer {
         }
         if (path == "/api/sms/threads" && method == "GET")
             return sms(context, app) { it.threads(query["offset"], query["limit"]) }
-        if (path == "/api/sms/uploads" && method == "POST") {
-            if (!PermissionManager.hasCapability(context, app?.id, "sms.send"))
-                return codedError(403, "missing-capability", "Missing capability: sms.send")
-            return uploadOperation {
-                MmsUploadStore(context)
-                    .create(
-                        app!!.id,
-                        decodedHeader(headers, "x-omniand-upload-name", 512),
-                        decodedHeader(headers, "x-omniand-upload-type", 256),
-                        requiredUploadHeader(headers, "x-omniand-upload-size").toLongOrNull()
-                            ?: throw MmsUploadStore.Invalid("invalid-upload"),
-                        requiredUploadHeader(headers, "x-omniand-upload-sha256"),
-                    )
-            }
-        }
-        val upload = Regex("^/api/sms/uploads/([^/]+)(?:/(complete|abort))?$").matchEntire(path)
-        if (upload != null && method == "POST") {
-            if (!PermissionManager.hasCapability(context, app?.id, "sms.send"))
-                return codedError(403, "missing-capability", "Missing capability: sms.send")
-            return uploadOperation {
-                val store = MmsUploadStore(context)
-                val id = upload.groupValues[1]
-                when (upload.groupValues[2]) {
-                    "complete" -> store.complete(app!!.id, id)
-                    "abort" -> store.abort(app!!.id, id)
-                    else ->
-                        store.append(
-                            app!!.id,
-                            id,
-                            requiredUploadHeader(headers, "x-omniand-upload-index").toIntOrNull()
-                                ?: throw MmsUploadStore.Invalid("invalid-upload-chunk"),
-                            if (body.isNotEmpty()) body
-                            else
-                                Base64.getDecoder()
-                                    .decode(
-                                        requiredUploadHeader(headers, "x-omniand-upload-chunk")
-                                    ),
-                        )
-                }
-            }
-        }
         if (path == "/api/sms/messages" && method == "POST") {
-            val subject =
-                headers["x-omniand-mms-subject"]?.let {
-                    URLDecoder.decode(it, "UTF-8")
-                }
-            val uploads =
-                headers["x-omniand-mms-uploads"]?.let {
-                    URLDecoder.decode(it, "UTF-8")
-                }
             return smsMutation(context, app, "sms.send") {
+                val document = requireJson(headers, body)
+                val uploads = document.requiredStringArray("uploads")
                 it.send(
-                    requiredHeader(headers, "x-omniand-sms-address"),
-                    requiredHeader(headers, "x-omniand-sms-body"),
-                    subject,
-                    uploads?.split(',')?.filter { id -> id.isNotBlank() }.orEmpty(),
+                    document.requiredString("address"),
+                    document.requiredString("body"),
+                    document.optionalString("subject"),
+                    List(uploads.length()) { uploads.getString(it) },
                     app!!.id,
                 )
             }
@@ -565,13 +479,13 @@ object PlatformServer {
         val threadRead = Regex("^/api/sms/threads/([^/]+)/read$").matchEntire(path)
         if (threadRead != null && method == "POST") {
             return smsMutation(context, app, "sms.modify") {
+                val read = requireJson(headers, body).requiredBoolean("read")
                 it.setThreadRead(
                         threadRead.groupValues[1],
-                        requiredHeader(headers, "x-omniand-sms-read"),
+                        read.toString(),
                     )
                     .also {
-                        if (requiredHeader(headers, "x-omniand-sms-read") == "true")
-                            SmsNotifications.cancelThread(context, threadRead.groupValues[1])
+                        if (read) SmsNotifications.cancelThread(context, threadRead.groupValues[1])
                         SmsReadEventPublisher.publishThread(threadRead.groupValues[1])
                     }
             }
@@ -579,9 +493,10 @@ object PlatformServer {
         val messageRead = Regex("^/api/sms/messages/([^/]+)/read$").matchEntire(path)
         if (messageRead != null && method == "POST") {
             return smsMutation(context, app, "sms.modify") {
+                val read = requireJson(headers, body).requiredBoolean("read")
                 it.setRead(
                         URLDecoder.decode(messageRead.groupValues[1], "UTF-8"),
-                        requiredHeader(headers, "x-omniand-sms-read"),
+                        read.toString(),
                     )
                     .also { result ->
                         if (result.optBoolean("read"))
@@ -769,13 +684,7 @@ object PlatformServer {
                                 ),
                         )
                     } else {
-                        val expectedVersion =
-                            headers["x-omniand-update-version"]
-                                ?: return codedError(
-                                    400,
-                                    "expected-version-required",
-                                    "X-OmniAnd-Update-Version is required",
-                                )
+                        val expectedVersion = requireJson(headers, body).requiredString("version")
                         if (
                             !update.available ||
                                 update.availableVersion != expectedVersion ||
@@ -802,6 +711,7 @@ object PlatformServer {
                             }
                     }
                 } catch (error: Exception) {
+                    if (error is InvalidRequest) throw error
                     Log.w(TAG, "Web application update failed", error)
                     codedError(
                         400,
@@ -820,7 +730,7 @@ object PlatformServer {
                     WebAppRegistry.apps(context)
                         .firstOrNull { it.id == appId }
                         ?.let { readAppIcon(context, it) }
-                return if (icon != null) Response("200 OK", "image/png", icon)
+                return if (icon != null) PlatformContent("200 OK", "image/png", icon)
                 else error(404, "Application icon not found")
             }
             if (
@@ -861,7 +771,7 @@ object PlatformServer {
         return error(404, "Unknown application origin")
     }
 
-    private fun sms(context: Context, app: WebApp?): Response {
+    private fun sms(context: Context, app: WebApp?): PlatformContent {
         return sms(context, app) { it.recent() }
     }
 
@@ -871,7 +781,7 @@ object PlatformServer {
         messageId: String,
         partId: String,
         range: String?,
-    ): Response {
+    ): PlatformContent {
         if (!PermissionManager.hasCapability(context, app?.id, "sms.read"))
             return codedError(403, "missing-capability", "Missing capability: sms.read")
         return try {
@@ -885,7 +795,7 @@ object PlatformServer {
             val match = range?.let { Regex("^bytes=(\\d*)-(\\d*)$").matchEntire(it) }
             if (range != null && match == null) return error(416, "Invalid byte range")
             if (match == null)
-                Response.bytes(
+                PlatformContent.bytes(
                     "200 OK",
                     if (part.inline) part.mime else "application/octet-stream",
                     part.bytes,
@@ -906,7 +816,7 @@ object PlatformServer {
                 if (start !in part.bytes.indices || end < start || end >= part.bytes.size)
                     return error(416, "Invalid byte range")
                 headers["Content-Range"] = "bytes $start-$end/${part.bytes.size}"
-                Response.bytes(
+                PlatformContent.bytes(
                     "206 Partial Content",
                     if (part.inline) part.mime else "application/octet-stream",
                     part.bytes.copyOfRange(start, end + 1),
@@ -930,7 +840,7 @@ object PlatformServer {
         context: Context,
         app: WebApp?,
         operation: (ContactsService) -> Any,
-    ): Response {
+    ): PlatformContent {
         if (!PermissionManager.hasCapability(context, app?.id, "contacts.read"))
             return codedError(403, "missing-capability", "Missing capability: contacts.read")
         return contactsOperation(context, operation)
@@ -940,16 +850,21 @@ object PlatformServer {
         context: Context,
         app: WebApp?,
         operation: (ContactsService) -> Any,
-    ): Response {
+    ): PlatformContent {
         if (!PermissionManager.hasCapability(context, app?.id, "contacts.write"))
             return codedError(403, "missing-capability", "Missing capability: contacts.write")
         return contactsOperation(context, operation)
     }
 
-    private fun contactsOperation(context: Context, operation: (ContactsService) -> Any): Response =
+    private fun contactsOperation(
+        context: Context,
+        operation: (ContactsService) -> Any,
+    ): PlatformContent =
         try {
             ContactsEventBroadcaster.start(context)
             json(200, operation(ContactsService(context)))
+        } catch (error: InvalidRequest) {
+            throw error
         } catch (_: ContactsService.PermissionMissing) {
             codedError(
                 403,
@@ -969,11 +884,11 @@ object PlatformServer {
             codedError(500, "contacts-failed", "Unable to access contacts")
         }
 
-    private fun contactsPhoto(context: Context, app: WebApp?, key: String): Response {
+    private fun contactsPhoto(context: Context, app: WebApp?, key: String): PlatformContent {
         if (!PermissionManager.hasCapability(context, app?.id, "contacts.read"))
             return codedError(403, "missing-capability", "Missing capability: contacts.read")
         return try {
-            Response("200 OK", "image/jpeg", ContactsService(context).photo(key))
+            PlatformContent("200 OK", "image/jpeg", ContactsService(context).photo(key))
         } catch (_: ContactsService.PermissionMissing) {
             codedError(
                 403,
@@ -997,16 +912,18 @@ object PlatformServer {
         context: Context,
         app: WebApp?,
         operation: (MediaService) -> Any,
-    ): Response {
+    ): PlatformContent {
         if (!PermissionManager.hasCapability(context, app?.id, "media.read"))
             return codedError(403, "missing-capability", "Missing capability: media.read")
         MediaEventBroadcaster.start(context)
         return mediaOperation { operation(MediaService(context)) }
     }
 
-    private fun mediaOperation(operation: () -> Any): Response =
+    private fun mediaOperation(operation: () -> Any): PlatformContent =
         try {
             json(200, operation())
+        } catch (error: InvalidRequest) {
+            throw error
         } catch (error: MediaService.Invalid) {
             val status =
                 when (error.code) {
@@ -1022,29 +939,11 @@ object PlatformServer {
             codedError(500, "media-failed", "Unable to access Android media")
         }
 
-    private fun mediaUpload(operation: () -> Any): Response =
-        try {
-            json(200, operation())
-        } catch (error: MediaUploadStore.Invalid) {
-            codedError(
-                if (error.code == "staging-limit") 413 else 400,
-                error.code,
-                mediaMessage(error.code),
-            )
-        } catch (_: ContactsService.InvalidInput) {
-            codedError(400, "invalid-upload", "Invalid media upload")
-        } catch (error: MediaService.Invalid) {
-            codedError(400, error.code, mediaMessage(error.code))
-        } catch (error: Exception) {
-            Log.e(TAG, "Media upload failed", error)
-            codedError(500, "storage-unavailable", "Media could not be published")
-        }
-
-    private fun mediaThumbnail(context: Context, app: WebApp?, id: String): Response {
+    private fun mediaThumbnail(context: Context, app: WebApp?, id: String): PlatformContent {
         if (!PermissionManager.hasCapability(context, app?.id, "media.read"))
             return codedError(403, "missing-capability", "Missing capability: media.read")
         return try {
-            Response.bytes(
+            PlatformContent.bytes(
                 "200 OK",
                 "image/jpeg",
                 MediaService(context).thumbnail(id),
@@ -1060,7 +959,12 @@ object PlatformServer {
     }
 
     /** Streams originals with one validated byte range and hardened download metadata. */
-    private fun mediaContent(context: Context, app: WebApp?, id: String, range: String?): Response {
+    private fun mediaContent(
+        context: Context,
+        app: WebApp?,
+        id: String,
+        range: String?,
+    ): PlatformContent {
         if (!PermissionManager.hasCapability(context, app?.id, "media.read"))
             return codedError(403, "missing-capability", "Missing capability: media.read")
         return try {
@@ -1089,7 +993,7 @@ object PlatformServer {
                     "Cache-Control" to "private, max-age=60",
                 )
             if (parsed != null) headers["Content-Range"] = "bytes $start-$end/${resource.length}"
-            Response.stream(
+            PlatformContent.stream(
                 if (parsed == null) "200 OK" else "206 Partial Content",
                 resource.mime,
                 { LimitedInputStream(resource.stream, length) },
@@ -1121,6 +1025,57 @@ object PlatformServer {
         return if (start < size && end in start until size) start..end else null
     }
 
+    /** Parses a bounded JSON mutation after authorization has selected the route. */
+    private fun requireJson(headers: Map<String, String>, body: ByteArray): JSONObject {
+        val contentType = headers["content-type"]?.substringBefore(';')?.trim()?.lowercase()
+        if (contentType != "application/json")
+            throw InvalidRequest(
+                415,
+                "unsupported-media-type",
+                "Content-Type must be application/json",
+            )
+        if (body.isEmpty()) throw InvalidRequest(400, "invalid-json", "A JSON body is required")
+        return runCatching { JSONObject(body.toString(Charsets.UTF_8)) }
+            .getOrElse { throw InvalidRequest(400, "invalid-json", "Malformed JSON request") }
+    }
+
+    private fun requireJpeg(headers: Map<String, String>, body: ByteArray): ByteArray {
+        if (headers["content-type"]?.substringBefore(';')?.trim()?.lowercase() != "image/jpeg")
+            throw InvalidRequest(415, "unsupported-media-type", "Content-Type must be image/jpeg")
+        if (body.isEmpty() || body.size > MAX_CONTACT_PHOTO)
+            throw InvalidRequest(400, "invalid-contact-request", "Invalid contact photo")
+        return body
+    }
+
+    private fun JSONObject.requiredString(name: String, max: Int = MAX_REQUEST_BODY): String =
+        opt(name)?.takeIf { it is String }?.let { it as String }?.takeIf { it.length <= max }
+            ?: throw InvalidRequest(400, "invalid-json", "$name must be a string")
+
+    private fun JSONObject.optionalString(name: String): String? {
+        if (!has(name) || isNull(name)) return null
+        return opt(name)?.takeIf { it is String } as? String
+            ?: throw InvalidRequest(400, "invalid-json", "$name must be a string")
+    }
+
+    private fun JSONObject.requiredBoolean(name: String): Boolean =
+        (opt(name) as? Boolean)
+            ?: throw InvalidRequest(400, "invalid-json", "$name must be a boolean")
+
+    private fun JSONObject.requiredObject(name: String): JSONObject =
+        opt(name) as? JSONObject
+            ?: throw InvalidRequest(400, "invalid-json", "$name must be an object")
+
+    private fun JSONObject.requiredStringArray(name: String): JSONArray {
+        val values =
+            opt(name) as? JSONArray
+                ?: throw InvalidRequest(400, "invalid-json", "$name must be an array")
+        repeat(values.length()) { index ->
+            if (values.opt(index) !is String)
+                throw InvalidRequest(400, "invalid-json", "$name must contain only strings")
+        }
+        return values
+    }
+
     private fun mediaMessage(code: String) =
         when (code) {
             "android-permission-required" -> "Android photo and video access has not been granted"
@@ -1135,13 +1090,6 @@ object PlatformServer {
             else -> "Invalid media request"
         }
 
-    private fun decodedHeader(headers: Map<String, String>, name: String, max: Int): String {
-        val raw = headers[name] ?: throw ContactsService.InvalidInput()
-        if (raw.length > max) throw ContactsService.InvalidInput()
-        return runCatching { URLDecoder.decode(raw, "UTF-8") }
-            .getOrElse { throw ContactsService.InvalidInput() }
-    }
-
     private fun requireIfMatch(headers: Map<String, String>) =
         headers["if-match"]?.trim()?.trim('"')?.takeIf { it.length <= 64 }
             ?: throw ContactsService.InvalidInput()
@@ -1154,7 +1102,11 @@ object PlatformServer {
                     URLDecoder.decode(it.substringAfter('=', ""), "UTF-8")
             }
 
-    private fun sms(context: Context, app: WebApp?, operation: (SmsService) -> Any): Response {
+    private fun sms(
+        context: Context,
+        app: WebApp?,
+        operation: (SmsService) -> Any,
+    ): PlatformContent {
         if (!PermissionManager.hasCapability(context, app?.id, "sms.read"))
             return error(403, "Missing capability: sms.read")
         return try {
@@ -1181,11 +1133,13 @@ object PlatformServer {
         app: WebApp?,
         capability: String,
         operation: (SmsService) -> Any,
-    ): Response {
+    ): PlatformContent {
         if (!PermissionManager.hasCapability(context, app?.id, capability))
             return error(403, "Missing capability: $capability")
         return try {
             json(200, operation(SmsService(context)))
+        } catch (error: InvalidRequest) {
+            throw error
         } catch (_: SmsService.PermissionMissing) {
             codedError(
                 403,
@@ -1219,27 +1173,11 @@ object PlatformServer {
         }
     }
 
-    private fun requiredHeader(headers: Map<String, String>, name: String): String =
-        headers[name]?.let { runCatching { URLDecoder.decode(it, "UTF-8") }.getOrNull() }
-            ?: throw SmsService.InvalidInput()
-
-    private fun requiredUploadHeader(headers: Map<String, String>, name: String): String =
-        headers[name]?.takeIf { it.length <= MAX_UPLOAD_HEADER }
-            ?: throw MmsUploadStore.Invalid("invalid-upload")
-
-    private fun uploadOperation(operation: () -> JSONObject): Response =
-        try {
-            json(200, operation())
-        } catch (error: MmsUploadStore.Invalid) {
-            codedError(400, error.code, "Invalid MMS attachment upload")
-        } catch (_: IllegalArgumentException) {
-            codedError(400, "invalid-upload-chunk", "Invalid MMS attachment upload")
-        } catch (error: Exception) {
-            Log.e(TAG, "MMS upload failed", error)
-            codedError(500, "upload-failed", "Unable to store MMS attachment")
-        }
-
-    private fun removeWebApp(context: Context, id: String, isLocalWebView: Boolean): Response {
+    private fun removeWebApp(
+        context: Context,
+        id: String,
+        isLocalWebView: Boolean,
+    ): PlatformContent {
         return try {
             if (!isLocalWebView)
                 return codedError(
@@ -1275,14 +1213,14 @@ object PlatformServer {
         app: WebApp?,
         isLocalWebView: Boolean,
         requestAuthority: String,
-    ): Response {
+    ): PlatformContent {
         val relative = if (rawPath == "/") "index.html" else rawPath.removePrefix("/")
         if (relative.contains("..")) return error(400, "Invalid path")
         return try {
             val bytes = context.assets.open("$root/$relative").use { it.readBytes() }
             val body = desktopDocument(bytes, relative, app, isLocalWebView, requestAuthority)
             val csp = app?.let(CspBuilder::build) ?: CspBuilder.buildPlatform()
-            Response("200 OK", mime(relative), body, csp)
+            PlatformContent("200 OK", mime(relative), body, csp)
         } catch (_: Exception) {
             error(404, "Not found")
         }
@@ -1294,11 +1232,11 @@ object PlatformServer {
         rawPath: String,
         isLocalWebView: Boolean,
         requestAuthority: String,
-    ): Response {
+    ): PlatformContent {
         val relative = if (rawPath == "/") "index.html" else rawPath.removePrefix("/")
         if (relative.contains("..")) return error(400, "Invalid path")
         return try {
-            Response(
+            PlatformContent(
                 "200 OK",
                 mime(relative),
                 desktopDocument(
@@ -1333,7 +1271,11 @@ object PlatformServer {
         }
 
     private fun json(code: Int, value: Any) =
-        Response(status(code), "application/json; charset=utf-8", value.toString().toByteArray())
+        PlatformContent(
+            status(code),
+            "application/json; charset=utf-8",
+            value.toString().toByteArray(),
+        )
 
     private fun error(code: Int, message: String) = json(code, JSONObject().put("error", message))
 
@@ -1352,6 +1294,7 @@ object PlatformServer {
             409 -> "409 Conflict"
             501 -> "501 Not Implemented"
             413 -> "413 Payload Too Large"
+            415 -> "415 Unsupported Media Type"
             416 -> "416 Range Not Satisfiable"
             429 -> "429 Too Many Requests"
             else -> "500 Internal Server Error"
@@ -1371,15 +1314,16 @@ object PlatformServer {
             else -> "application/octet-stream"
         }
 
-    class Response
+    /** Native Ktor output that preserves fixed and streamed business responses. */
+    class PlatformContent
     private constructor(
-        val status: String,
-        val contentType: String,
+        private val statusLine: String,
+        private val contentTypeValue: String,
         private val fixedBody: ByteArray?,
         val csp: String? = null,
         private val streamBody: (() -> java.io.InputStream)? = null,
         private val extraHeaders: Map<String, String> = emptyMap(),
-    ) {
+    ) : OutgoingContent.WriteChannelContent() {
         constructor(
             status: String,
             contentType: String,
@@ -1387,25 +1331,34 @@ object PlatformServer {
             csp: String? = null,
         ) : this(status, contentType, body, csp, null)
 
-        val statusCode: Int
-            get() = status.substringBefore(' ').toInt()
+        override val status: HttpStatusCode
+            get() = HttpStatusCode.fromValue(statusLine.substringBefore(' ').toInt())
 
-        val reason: String
-            get() = status.substringAfter(' ')
+        override val contentType: ContentType
+            get() = ContentType.parse(contentTypeValue)
 
-        val contentLength: Int?
-            get() = fixedBody?.size
+        override val contentLength: Long?
+            get() = fixedBody?.size?.toLong()
 
-        fun openBody(): java.io.InputStream = fixedBody?.inputStream() ?: streamBody!!.invoke()
-
-        val headers: Map<String, String>
-            get() = buildMap {
-                put("Cache-Control", "no-store")
-                put("X-Content-Type-Options", "nosniff")
-                put("Referrer-Policy", "no-referrer")
-                csp?.let { put("Content-Security-Policy", it) }
-                putAll(extraHeaders)
+        override val headers: Headers
+            get() = Headers.build {
+                append("Cache-Control", "no-store")
+                append("X-Content-Type-Options", "nosniff")
+                append("Referrer-Policy", "no-referrer")
+                csp?.let { append("Content-Security-Policy", it) }
+                extraHeaders.forEach { (name, value) -> append(name, value) }
             }
+
+        override suspend fun writeTo(channel: ByteWriteChannel) {
+            (fixedBody?.inputStream() ?: streamBody!!.invoke()).use { source ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val count = source.read(buffer)
+                    if (count < 0) break
+                    channel.writeFully(buffer, 0, count)
+                }
+            }
+        }
 
         companion object {
             fun bytes(
@@ -1413,14 +1366,14 @@ object PlatformServer {
                 contentType: String,
                 body: ByteArray,
                 headers: Map<String, String>,
-            ) = Response(status, contentType, body, null, null, headers)
+            ) = PlatformContent(status, contentType, body, null, null, headers)
 
             fun stream(
                 status: String,
                 contentType: String,
                 body: () -> java.io.InputStream,
                 headers: Map<String, String>,
-            ) = Response(status, contentType, null, null, body, headers)
+            ) = PlatformContent(status, contentType, null, null, body, headers)
         }
     }
 
@@ -1447,8 +1400,8 @@ object PlatformServer {
 
     private const val TAG = "OmniAndHttp"
     internal const val MAX_REQUEST_BODY = 256 * 1024
-    private const val MAX_CONTACT_JSON = 96 * 1024
     private const val MAX_CONTACT_PHOTO = 256 * 1024
-    private const val MAX_PHOTO_HEADER = 400 * 1024
-    private const val MAX_UPLOAD_HEADER = 33 * 1024
+
+    private class InvalidRequest(val status: Int, val code: String, message: String) :
+        Exception(message)
 }

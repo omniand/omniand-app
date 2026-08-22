@@ -105,5 +105,7 @@ dependencies {
     implementation("io.ktor:ktor-server-core:3.3.1")
     runtimeOnly("org.slf4j:slf4j-nop:2.0.17")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("io.ktor:ktor-server-test-host:3.3.1")
     testImplementation("org.json:json:20240303")
+    testImplementation("org.mockito:mockito-core:5.21.0")
 }

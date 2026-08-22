@@ -17,6 +17,12 @@ same-site, exact-host session cookie derived from a process-lifetime secret. The
 and with that host's credential. Unsafe API methods additionally require the exact matching
 `Origin`. Restarting OmniAnd invalidates old credentials.
 
+Ktor registers pairing, media, contacts, SMS/MMS, application-management, SSE, binary-resource,
+and static-asset routes explicitly. Mutations use ordinary JSON or raw JPEG request bodies. Gallery
+and Messages send a single `multipart/form-data` request per upload; the server streams each file to
+bounded temporary storage, verifies its SHA-256 digest, and removes temporary data on every outcome.
+Gallery accepts files through 500 MiB, while one staged MMS attachment is limited to 10 MiB.
+
 For desktop access, wildcard DNS must point the configured canonical hostname and its subdomains at
 the phone. The embedded server listens on cleartext HTTP port 8080, so a trusted TLS reverse proxy
 must terminate HTTPS and preserve the original `Host` header. The cleartext listener must not be
@@ -152,7 +158,7 @@ node --check ../omniAndStore/apps/store/app.js
 On API 26 and API 35 devices, verify the launcher starts OmniAnd, each mobile URL uses the expected
 `.localhost:8080` authority, and `window.isSecureContext` is true. Confirm Messages works when
 Android grants the required role and permissions, while Permission test receives `403 Forbidden`.
-Verify Store operations, binary uploads, file selection, and multiple events over one SSE
+Verify Store operations, multipart uploads and cancellation, file selection, and multiple events over one SSE
 connection. Disable Wi-Fi and mobile data and confirm loopback operation continues. Raw, cross-host,
 alternate-port, and non-loopback `.localhost` requests must receive `401`. For desktop testing,
 configure wildcard DNS and trusted TLS termination, open the configured canonical Home, request

@@ -2,12 +2,11 @@ package dev.omniand.hub.sms
 
 import android.content.Context
 import java.io.File
-import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.util.UUID
 import org.json.JSONObject
 
-/** Owns bounded, sequential attachment uploads used by body-less local WebView requests. */
+/** Owns completed, owner-bound MMS attachments received through one multipart request. */
 class MmsUploadStore(
     private val context: Context,
     private val now: () -> Long = System::currentTimeMillis,
@@ -24,65 +23,49 @@ class MmsUploadStore(
 
     private val root = File(context.noBackupFilesDir, "mms-uploads")
 
+    /** Moves a verified temporary multipart payload into owner-bound attachment staging. */
     @Synchronized
-    fun create(owner: String, name: String, mime: String, size: Long, sha256: String): JSONObject {
+    fun stage(owner: String, name: String, mime: String, sha256: String, file: File): JSONObject {
         cleanup()
-        if (name.isBlank() || name.length > 128 || mime.length > 100 || size !in 1..MAX_SIZE)
+        val size = file.length()
+        if (
+            owner.isBlank() ||
+                name.isBlank() ||
+                name.length > 128 ||
+                mime.length > 100 ||
+                size !in 1..MAX_SIZE ||
+                !sha256.matches(Regex("[0-9a-fA-F]{64}"))
+        )
             throw Invalid("invalid-upload")
-        if (!sha256.matches(Regex("[0-9a-fA-F]{64}"))) throw Invalid("invalid-upload")
+        val digest = MessageDigest.getInstance("SHA-256").digest(file.readBytes()).toHex()
+        if (digest != sha256.lowercase()) throw Invalid("upload-digest-mismatch")
         root.mkdirs()
         val id = UUID.randomUUID().toString()
-        metadata(id)
-            .writeText(
-                JSONObject()
-                    .put("owner", owner)
-                    .put("name", name)
-                    .put("mime", mime.lowercase())
-                    .put("size", size)
-                    .put("sha256", sha256.lowercase())
-                    .put("created", now())
-                    .put("next", 0)
-                    .put("complete", false)
-                    .toString()
-            )
-        return JSONObject().put("id", id).put("chunkSize", CHUNK_SIZE)
-    }
-
-    @Synchronized
-    fun append(owner: String, id: String, index: Int, bytes: ByteArray): JSONObject {
-        val state = state(owner, id)
-        if (state.getBoolean("complete") || index != state.getInt("next"))
-            throw Invalid("upload-chunk-order")
-        if (bytes.isEmpty() || bytes.size > CHUNK_SIZE) throw Invalid("invalid-upload-chunk")
-        val payload = payload(id)
-        if (payload.length() + bytes.size > state.getLong("size")) throw Invalid("upload-too-large")
-        FileOutputStream(payload, true).use { output ->
-            output.write(bytes)
-            output.fd.sync()
+        return try {
+            if (!file.renameTo(payload(id))) {
+                file.copyTo(payload(id), overwrite = true)
+                file.delete()
+            }
+            metadata(id)
+                .writeText(
+                    JSONObject()
+                        .put("owner", owner)
+                        .put("name", name)
+                        .put("mime", mime.lowercase())
+                        .put("size", size)
+                        .put("sha256", sha256.lowercase())
+                        .put("created", now())
+                        .put("complete", true)
+                        .toString()
+                )
+            JSONObject().put("id", id).put("complete", true)
+        } catch (error: Exception) {
+            metadata(id).delete()
+            payload(id).delete()
+            throw error
+        } finally {
+            file.delete()
         }
-        state.put("next", index + 1)
-        metadata(id).writeText(state.toString())
-        return JSONObject().put("received", payload.length()).put("next", index + 1)
-    }
-
-    @Synchronized
-    fun complete(owner: String, id: String): JSONObject {
-        val state = state(owner, id)
-        val payload = payload(id)
-        if (payload.length() != state.getLong("size")) throw Invalid("upload-size-mismatch")
-        val digest = MessageDigest.getInstance("SHA-256").digest(payload.readBytes()).toHex()
-        if (digest != state.getString("sha256")) throw Invalid("upload-digest-mismatch")
-        state.put("complete", true)
-        metadata(id).writeText(state.toString())
-        return JSONObject().put("id", id).put("complete", true)
-    }
-
-    @Synchronized
-    fun abort(owner: String, id: String): JSONObject {
-        state(owner, id)
-        metadata(id).delete()
-        payload(id).delete()
-        return JSONObject().put("aborted", true)
     }
 
     @Synchronized
@@ -139,7 +122,6 @@ class MmsUploadStore(
     private fun ByteArray.toHex() = joinToString("") { "%02x".format(it) }
 
     companion object {
-        const val CHUNK_SIZE = 24 * 1024
         const val MAX_SIZE = 10L * 1024 * 1024
         const val MAX_AGE = 60L * 60 * 1000
     }
