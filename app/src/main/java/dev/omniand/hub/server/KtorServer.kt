@@ -71,6 +71,7 @@ object KtorServer {
     private fun Route.mediaRoutes(context: Context) {
         route("/api/media") {
             get { call.forward(context) }
+            get("/folders") { call.forward(context) }
             get("/setup") { call.forward(context) }
             post("/setup/request") { call.forward(context) }
             get("/events") { call.forward(context) }
@@ -206,6 +207,7 @@ object KtorServer {
         var fileName: String? = null
         var mime: String? = null
         var digest: String? = null
+        var folder: String? = null
         var sawFile = false
         var invalid = false
         try {
@@ -215,8 +217,14 @@ object KtorServer {
                 try {
                     when (part) {
                         is PartData.FormItem -> {
-                            if (part.name != "sha256" || digest != null) invalid = true
-                            else digest = part.value
+                            when (part.name) {
+                                "sha256" ->
+                                    if (digest != null) invalid = true else digest = part.value
+                                "folder" ->
+                                    if (kind != UploadKind.MEDIA || folder != null) invalid = true
+                                    else folder = part.value
+                                else -> invalid = true
+                            }
                         }
                         is PartData.FileItem -> {
                             if (part.name != "file" || sawFile) {
@@ -264,6 +272,7 @@ object KtorServer {
                             mime!!,
                             digest!!,
                             temporary,
+                            folder,
                         )
                 else
                     MmsUploadStore(context)

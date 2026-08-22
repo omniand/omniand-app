@@ -1,11 +1,13 @@
 package dev.omniand.hub.server
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import dev.omniand.hub.BuildConfig
 import dev.omniand.hub.DesktopPairingNotifications
 import dev.omniand.hub.contacts.ContactsEventBroadcaster
 import dev.omniand.hub.contacts.ContactsSetupManager
+import dev.omniand.hub.media.MediaDeleteActivity
 import dev.omniand.hub.media.MediaEventBroadcaster
 import dev.omniand.hub.media.MediaSetupManager
 import dev.omniand.hub.permissions.PermissionManager
@@ -287,6 +289,18 @@ object PlatformServer {
         val host = request.hostname
         val isLocalWebView = request.phoneClient
         val isLocalPlatformHome = canManageCatalog(request)
+        if (
+            path == DesktopNavigationBar.SCRIPT_PATH &&
+                method == "GET" &&
+                app != null &&
+                !isLocalWebView
+        )
+            return PlatformContent(
+                "200 OK",
+                "text/javascript; charset=utf-8",
+                DesktopNavigationBar.script(),
+                CspBuilder.build(app),
+            )
         if (path == "/api/media/setup" && method == "GET") {
             if (!hasMediaCapability(context, app))
                 return codedError(403, "missing-capability", "Missing Media capability")
@@ -320,6 +334,14 @@ object PlatformServer {
                     query["type"] ?: "all",
                     query["offset"]?.toIntOrNull() ?: 0,
                     query["limit"]?.toIntOrNull() ?: 60,
+                    query["folder"],
+                )
+            }
+        if (path == "/api/media/folders" && method == "GET")
+            return mediaRead(context, app) {
+                it.folders(
+                    query["offset"]?.toIntOrNull() ?: 0,
+                    query["limit"]?.toIntOrNull() ?: 60,
                 )
             }
         if (path == "/api/media/delete" && method == "POST") {
@@ -327,7 +349,15 @@ object PlatformServer {
                 return codedError(403, "missing-capability", "Missing capability: media.write")
             return mediaOperation {
                 val ids = requireJson(headers, body).requiredStringArray("ids")
-                MediaService(context).delete(List(ids.length()) { ids.getString(it) })
+                val requested = List(ids.length()) { ids.getString(it) }
+                val service = MediaService(context)
+                val plan = service.deletePlan(requested)
+                if (isLocalWebView && Build.VERSION.SDK_INT >= 30 && plan.needsConfirmation) {
+                    MediaDeleteActivity.request(context, plan.uris)
+                    JSONObject().put("pending", true)
+                } else {
+                    service.delete(requested)
+                }
             }
         }
         val mediaResource = Regex("^/api/media/([^/]+)(?:/(thumbnail|content))?$").matchEntire(path)
@@ -1030,6 +1060,9 @@ object PlatformServer {
             "not-found" -> "Media item not found"
             "invalid-media" -> "The uploaded file is not a supported decoded image or video"
             "hash-mismatch" -> "The uploaded file failed SHA-256 verification"
+            "invalid-folder" -> "The media folder identifier is malformed"
+            "folder-not-found" -> "The media folder is no longer available"
+            "storage-unavailable" -> "The destination folder is not writable"
             "staging-limit" -> "The active upload staging limit was reached"
             "file-count-limit" -> "At most 20 active uploads are allowed per application"
             else -> "Invalid media request"

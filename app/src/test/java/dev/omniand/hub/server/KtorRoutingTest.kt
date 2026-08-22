@@ -20,6 +20,7 @@ class KtorRoutingTest {
 
         listOf(
                 "/api/media/setup",
+                "/api/media/folders",
                 "/api/contacts/accounts",
                 "/api/sms/threads",
                 "/api/contacts/a%2Fb",

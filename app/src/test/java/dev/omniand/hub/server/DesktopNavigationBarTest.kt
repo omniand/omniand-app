@@ -18,7 +18,7 @@ class DesktopNavigationBarTest {
     }
 
     @Test
-    fun injectsHomeLinkAfterBodyTag() {
+    fun injectsBackAndHomeControlsAfterBodyTag() {
         val result =
             DesktopNavigationBar.inject(
                     "<!doctype html><body class=\"app\"><main>Messages</main></body>".toByteArray(),
@@ -29,7 +29,20 @@ class DesktopNavigationBarTest {
 
         assertTrue(result.contains("<body class=\"app\"><style"))
         assertTrue(result.contains("href=\"https://phone.example.org/\""))
+        assertTrue(result.contains("data-omniand-back"))
+        assertTrue(result.contains("aria-label=\"Home\""))
+        assertTrue(result.contains("src=\"${DesktopNavigationBar.SCRIPT_PATH}\""))
         assertTrue(result.contains("<span>Messages</span>"))
+    }
+
+    @Test
+    fun backScriptClosesDialogsBeforeUsingBrowserHistory() {
+        val script = DesktopNavigationBar.script().toString(Charsets.UTF_8)
+
+        assertTrue(script.contains("[role=\"dialog\"]"))
+        assertTrue(script.contains("key: 'Escape'"))
+        assertTrue(script.contains("history.back()"))
+        assertTrue(script.contains("location.assign(back.dataset.home)"))
     }
 
     @Test

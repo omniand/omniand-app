@@ -126,6 +126,18 @@ class WebAppActivity : Activity() {
         if (webView.canGoBack()) webView.goBack() else super.onBackPressed()
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (::webView.isInitialized) {
+            webView.post {
+                webView.evaluateJavascript(
+                    "window.dispatchEvent(new Event('omniand:resume'))",
+                    null,
+                )
+            }
+        }
+    }
+
     override fun onDestroy() {
         if (::webView.isInitialized) webView.destroy()
         super.onDestroy()

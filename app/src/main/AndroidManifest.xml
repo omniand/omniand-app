@@ -69,6 +69,9 @@
             android:name=".media.MediaSetupActivity"
             android:exported="false" />
         <activity
+            android:name=".media.MediaDeleteActivity"
+            android:exported="false" />
+        <activity
             android:name=".sms.SmsSendToActivity"
             android:exported="true">
             <intent-filter>

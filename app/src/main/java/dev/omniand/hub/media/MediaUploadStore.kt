@@ -11,11 +11,22 @@ class MediaUploadStore(private val context: Context) {
 
     /** Publishes a fully received multipart file and always removes its temporary payload. */
     @Synchronized
-    fun publish(owner: String, name: String, mime: String, sha256: String, file: File): JSONObject {
+    fun publish(
+        owner: String,
+        name: String,
+        mime: String,
+        sha256: String,
+        file: File,
+        folder: String? = null,
+    ): JSONObject {
         try {
             validate(owner, name, mime, file.length(), sha256)
             if (MediaService.sha256(file) != sha256.lowercase()) throw Invalid("hash-mismatch")
-            return MediaService(context).publish(file, name, mime)
+            return try {
+                MediaService(context).publish(file, name, mime, folder)
+            } catch (error: MediaService.Invalid) {
+                throw Invalid(error.code)
+            }
         } finally {
             file.delete()
         }
