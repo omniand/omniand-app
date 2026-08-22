@@ -2,21 +2,14 @@ package dev.omniand.launcher
 
 import android.app.Activity
 import android.content.Intent
-import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
-import android.text.TextUtils
-import android.view.Gravity
-import android.view.ViewGroup
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.ImageButton
-import android.widget.LinearLayout
-import android.widget.TextView
 import dev.omniand.launcher.contacts.ContactsSetupManager
 import dev.omniand.launcher.media.MediaSetupManager
 import dev.omniand.launcher.sms.SmsNotifications
@@ -132,91 +125,12 @@ class WebAppActivity : Activity() {
                         }
                     }
             }
-        if (intent.getBooleanExtra(EXTRA_ANDROID_INTEGRATION, false)) {
-            setContentView(webView)
-        } else {
-            setContentView(
-                LinearLayout(this).apply {
-                    orientation = LinearLayout.VERTICAL
-                    addView(
-                        createNavigationBar(app.name),
-                        LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            dp(56),
-                        ),
-                    )
-                    addView(
-                        webView,
-                        LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            0,
-                            1f,
-                        ),
-                    )
-                }
-            )
-        }
+        setContentView(webView)
         val route = intent.getStringExtra(EXTRA_ROUTE)?.takeIf(::validRoute).orEmpty()
         LocalWebViewBootstrap.load(this, webView, "${app.id}.localhost", route)
         if (app.id == "messages")
             intent.getStringExtra(EXTRA_THREAD_ID)?.let { SmsNotifications.cancelThread(this, it) }
     }
-
-    private fun createNavigationBar(appName: String) =
-        LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(8), 0, dp(16), 0)
-            setBackgroundColor(Color.rgb(247, 245, 250))
-            elevation = dp(3).toFloat()
-
-            addView(
-                ImageButton(context).apply {
-                    setImageResource(R.drawable.ic_arrow_back)
-                    contentDescription = "Revenir à la liste des applications"
-                    val attributes =
-                        context.obtainStyledAttributes(
-                            intArrayOf(android.R.attr.selectableItemBackgroundBorderless)
-                        )
-                    background = attributes.getDrawable(0)
-                    attributes.recycle()
-                    scaleType = android.widget.ImageView.ScaleType.CENTER
-                    setOnClickListener { openPlatformHome() }
-                },
-                LinearLayout.LayoutParams(
-                    dp(48),
-                    dp(48),
-                ),
-            )
-
-            addView(
-                TextView(context).apply {
-                    text = appName
-                    textSize = 18f
-                    setTextColor(Color.rgb(31, 31, 31))
-                    setSingleLine()
-                    ellipsize = TextUtils.TruncateAt.END
-                    gravity = Gravity.CENTER_VERTICAL
-                    setPadding(dp(12), 0, 0, 0)
-                },
-                LinearLayout.LayoutParams(
-                    0,
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    1f,
-                ),
-            )
-        }
-
-    private fun openPlatformHome() {
-        startActivity(
-            Intent(this, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            }
-        )
-        finish()
-    }
-
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
@@ -261,7 +175,6 @@ class WebAppActivity : Activity() {
             private set
 
         const val EXTRA_APP_ID = "appId"
-        const val EXTRA_ANDROID_INTEGRATION = "androidIntegration"
         const val EXTRA_ROUTE = "route"
         const val EXTRA_THREAD_ID = "threadId"
         private const val FILE_CHOOSER = 91

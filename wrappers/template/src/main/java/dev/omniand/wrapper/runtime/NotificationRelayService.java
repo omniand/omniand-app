@@ -135,7 +135,6 @@ public final class NotificationRelayService extends Service {
                 new Intent()
                         .setClassName("dev.omniand.launcher", "dev.omniand.launcher.WebAppActivity")
                         .putExtra("appId", appId)
-                        .putExtra("androidIntegration", true)
                         .putExtra("route", "#/thread?id=" + thread)
                         .putExtra("threadId", thread);
         PendingIntent pending =

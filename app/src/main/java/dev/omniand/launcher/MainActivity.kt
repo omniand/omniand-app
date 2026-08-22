@@ -42,10 +42,13 @@ class MainActivity : Activity() {
                                         }
                                     }
                             if (app != null) {
-                                startActivity(
-                                    Intent(this@MainActivity, WebAppActivity::class.java)
-                                        .putExtra(WebAppActivity.EXTRA_APP_ID, app.id)
-                                )
+                                val launchIntent =
+                                    app.packageName?.let {
+                                        packageManager.getLaunchIntentForPackage(it)
+                                    }
+                                        ?: Intent(this@MainActivity, WebAppActivity::class.java)
+                                            .putExtra(WebAppActivity.EXTRA_APP_ID, app.id)
+                                startActivity(launchIntent)
                             } else {
                                 runCatching { startActivity(Intent(Intent.ACTION_VIEW, uri)) }
                             }
