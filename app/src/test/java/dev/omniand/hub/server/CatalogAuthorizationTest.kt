@@ -21,6 +21,36 @@ class CatalogAuthorizationTest {
         )
     }
 
+    @Test
+    fun hubConfigurationMutationsRequireThePhonePlatformHome() {
+        assertTrue(PlatformServer.canManageHub(request("localhost", true, null)))
+        assertFalse(PlatformServer.canManageHub(request("phone.example.org", false, null)))
+        assertFalse(
+            PlatformServer.canManageHub(
+                request(
+                    "messages.localhost",
+                    true,
+                    WebApp("messages", "Messages", "1.0.0", emptySet()),
+                )
+            )
+        )
+    }
+
+    @Test
+    fun desktopPresenceRejectsPhoneClientsAndAcceptsAuthenticatedDesktopOrigins() {
+        assertFalse(PlatformServer.canReadDesktopPresence(request("localhost", true, null)))
+        assertTrue(PlatformServer.canReadDesktopPresence(request("phone.example.org", false, null)))
+        assertTrue(
+            PlatformServer.canReadDesktopPresence(
+                request(
+                    "messages.phone.example.org",
+                    false,
+                    WebApp("messages", "Messages", "1.0.0", emptySet()),
+                )
+            )
+        )
+    }
+
     private fun request(host: String, phone: Boolean, app: WebApp?) =
         PlatformRequestContext(
             authority = if (phone) "$host:8080" else host,

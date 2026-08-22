@@ -8,6 +8,7 @@ class PlatformShellAssetPathTest {
     fun `shell routes resolve to the SPA entry document`() {
         assertEquals("/", PlatformServer.platformShellAssetPath("/discover"))
         assertEquals("/", PlatformServer.platformShellAssetPath("/discover/messages"))
+        assertEquals("/", PlatformServer.platformShellAssetPath("/settings"))
     }
 
     @Test

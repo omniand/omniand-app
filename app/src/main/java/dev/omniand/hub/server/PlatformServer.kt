@@ -5,6 +5,8 @@ import android.os.Build
 import android.util.Log
 import dev.omniand.hub.BuildConfig
 import dev.omniand.hub.DesktopPairingNotifications
+import dev.omniand.hub.background.BackgroundHostingManager
+import dev.omniand.hub.background.PresenceTracker
 import dev.omniand.hub.contacts.ContactsEventBroadcaster
 import dev.omniand.hub.contacts.ContactsSetupManager
 import dev.omniand.hub.media.MediaDeleteActivity
@@ -14,6 +16,7 @@ import dev.omniand.hub.permissions.PermissionManager
 import dev.omniand.hub.services.ContactsService
 import dev.omniand.hub.services.MediaService
 import dev.omniand.hub.services.SmsService
+import dev.omniand.hub.settings.HubSettingsManager
 import dev.omniand.hub.sms.SmsEventBroadcaster
 import dev.omniand.hub.sms.SmsNotifications
 import dev.omniand.hub.sms.SmsReadEventPublisher
@@ -173,8 +176,13 @@ object PlatformServer {
         capability: String,
     ) = PermissionManager.hasCapability(context, request.app?.id, capability)
 
-    internal fun canManageCatalog(request: PlatformRequestContext): Boolean =
+    internal fun canManageCatalog(request: PlatformRequestContext): Boolean = canManageHub(request)
+
+    internal fun canManageHub(request: PlatformRequestContext): Boolean =
         request.phoneClient && request.app == null && request.hostname == "localhost"
+
+    internal fun canReadDesktopPresence(request: PlatformRequestContext): Boolean =
+        !request.phoneClient && request.transport == PlatformRequestContext.Transport.DESKTOP_HTTP
 
     /** Serves only the bounded unauthenticated handshake on the configured canonical Home host. */
     private fun desktopPairingResponse(
@@ -291,7 +299,39 @@ object PlatformServer {
         val app = request.app
         val host = request.hostname
         val isLocalWebView = request.phoneClient
-        val isLocalPlatformHome = canManageCatalog(request)
+        val isLocalPlatformHome = canManageHub(request)
+        if (path == "/api/hub/settings" && method == "GET") {
+            if (!isLocalPlatformHome)
+                return codedError(403, "phone-local-required", "Hub settings are phone-local")
+            return json(200, HubSettingsManager.state(context))
+        }
+        val permissionRequest = Regex("^/api/hub/permissions/([^/]+)/request$").matchEntire(path)
+        if (permissionRequest != null && method == "POST") {
+            if (!isLocalPlatformHome)
+                return codedError(403, "phone-local-required", "Permission setup is phone-local")
+            val group = URLDecoder.decode(permissionRequest.groupValues[1], "UTF-8")
+            if (!HubSettingsManager.request(context, group))
+                return codedError(404, "unknown-permission-group", "Unknown permission group")
+            return json(200, JSONObject().put("opened", true))
+        }
+        if (path == "/api/hub/settings/background-hosting" && method == "PUT") {
+            if (!isLocalPlatformHome)
+                return codedError(403, "phone-local-required", "Hub settings are phone-local")
+            val enabled = requireJson(headers, body).requiredBoolean("enabled")
+            BackgroundHostingManager.setEnabled(context, enabled)
+            if (enabled) BackgroundHostingManager.requestAccess(context)
+            return json(200, HubSettingsManager.state(context).getJSONObject("backgroundHosting"))
+        }
+        if (path == "/api/hub/presence" && method == "GET") {
+            if (!canReadDesktopPresence(request))
+                return codedError(403, "desktop-required", "Desktop presence is desktop-only")
+            return PlatformContent.stream(
+                "200 OK",
+                "text/event-stream; charset=utf-8",
+                { PresenceTracker.subscribe(context) },
+                mapOf("Cache-Control" to "no-cache, no-transform", "X-Accel-Buffering" to "no"),
+            )
+        }
         if (path == "/favicon.ico" && method == "GET" && app != null) {
             val icon = readAppIcon(context, app)
             return if (icon != null) PlatformContent("200 OK", "image/png", icon)
@@ -760,7 +800,9 @@ object PlatformServer {
     internal fun platformShellAssetPath(path: String): String =
         when {
             path == "/favicon.ico" -> "/assets/hub-icon.png"
-            path == "/discover" || path.matches(Regex("^/discover/[^/]+$")) -> "/"
+            path == "/settings" ||
+                path == "/discover" ||
+                path.matches(Regex("^/discover/[^/]+$")) -> "/"
             else -> path
         }
 

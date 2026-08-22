@@ -29,11 +29,22 @@ class KtorRoutingTest {
                 "/api/apps/web",
                 "/api/apps/catalog",
                 "/api/apps/catalog/messages/icon",
+                "/api/hub/settings",
+                "/api/hub/presence",
             )
             .forEach { path ->
                 val response = client.get(path) { header(HttpHeaders.Host, "localhost:8080") }
                 assertEquals(path, HttpStatusCode.Unauthorized, response.status)
             }
+
+        assertEquals(
+            HttpStatusCode.Unauthorized,
+            client
+                .post("/api/hub/permissions/sms/request") {
+                    header(HttpHeaders.Host, "localhost:8080")
+                }
+                .status,
+        )
 
         assertEquals(
             HttpStatusCode.NotFound,

@@ -49,6 +49,7 @@ object KtorServer {
             contactsRoutes(context)
             smsRoutes(context)
             applicationRoutes(context)
+            hubRoutes(context)
             route("/{remaining...}") { get { call.staticOrNotFound(context) } }
         }
     }
@@ -130,6 +131,15 @@ object KtorServer {
             get("/web") { call.forward(context) }
             get("/web/{id}/icon") { call.forward(context) }
             post("/web/{id}/uninstall") { call.forward(context) }
+        }
+    }
+
+    private fun Route.hubRoutes(context: Context) {
+        route("/api/hub") {
+            get("/settings") { call.forward(context) }
+            put("/settings/background-hosting") { call.forward(context) }
+            post("/permissions/{group}/request") { call.forward(context) }
+            get("/presence") { call.forward(context) }
         }
     }
 

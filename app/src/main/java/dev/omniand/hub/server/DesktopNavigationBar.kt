@@ -77,6 +77,7 @@ object DesktopNavigationBar {
     fun script(): ByteArray =
         """
         (() => {
+          window.__omniandPresence ||= new EventSource('/api/hub/presence');
           const back = document.querySelector('[data-omniand-back]');
           if (!back) return;
           back.addEventListener('click', () => {

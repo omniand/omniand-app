@@ -7,6 +7,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import dev.omniand.hub.background.BackgroundHostingManager
 import dev.omniand.hub.contacts.ContactsSetupManager
 import dev.omniand.hub.media.MediaSetupManager
 import dev.omniand.hub.sms.SmsSetupManager
@@ -70,6 +71,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        if (BackgroundHostingManager.isEnabled(this)) BackgroundHostingManager.start(this)
         isActive = true
         activeInstance = this
         WebAppRegistry.invalidate()
