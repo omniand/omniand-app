@@ -2,6 +2,7 @@ package dev.omniand.hub.server
 
 import android.content.Context
 import dev.omniand.hub.media.MediaUploadStore
+import dev.omniand.hub.services.FilesService
 import dev.omniand.hub.sms.MmsUploadStore
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
@@ -47,6 +48,7 @@ object KtorServer {
             pairingRoutes(context)
             mediaRoutes(context)
             contactsRoutes(context)
+            filesRoutes(context)
             smsRoutes(context)
             applicationRoutes(context)
             hubRoutes(context)
@@ -99,6 +101,28 @@ object KtorServer {
             get("/{key}/photo") { call.forward(context) }
             put("/{key}/photo") { call.forward(context) }
             delete("/{key}/photo") { call.forward(context) }
+        }
+    }
+
+    private fun Route.filesRoutes(context: Context) {
+        route("/api/files") {
+            get("/setup") { call.forward(context) }
+            post("/setup/request") { call.forward(context) }
+            get("/roots") { call.forward(context) }
+            get("/entries") { call.forward(context) }
+            get("/entries/{id}") { call.forward(context) }
+            get("/entries/{id}/content") { call.forward(context) }
+            get("/search") { call.forward(context) }
+            get("/recents") { call.forward(context) }
+            get("/favorites") { call.forward(context) }
+            post("/favorites") { call.forward(context) }
+            get("/events") { call.forward(context) }
+            post("/folders") { call.forward(context) }
+            post("/rename") { call.forward(context) }
+            post("/jobs") { call.forward(context) }
+            get("/jobs/{id}") { call.forward(context) }
+            delete("/jobs/{id}") { call.forward(context) }
+            post("/uploads") { call.receiveUpload(context, UploadKind.FILES) }
         }
     }
 
@@ -204,20 +228,31 @@ object KtorServer {
             respondJson(401, "authentication-required", "Unauthorized")
             return
         }
-        val capability = if (kind == UploadKind.MEDIA) "media.write" else "sms.send"
+        val capability =
+            when (kind) {
+                UploadKind.MEDIA -> "media.write"
+                UploadKind.SMS -> "sms.send"
+                UploadKind.FILES -> "files.write"
+            }
         if (!PlatformServer.hasCapability(context, requestContext, capability)) {
             respondJson(403, "missing-capability", "Missing capability: $capability")
             return
         }
 
         val limit =
-            if (kind == UploadKind.MEDIA) MediaUploadStore.MAX_FILE else MmsUploadStore.MAX_SIZE
+            when (kind) {
+                UploadKind.MEDIA -> MediaUploadStore.MAX_FILE
+                UploadKind.SMS -> MmsUploadStore.MAX_SIZE
+                UploadKind.FILES -> FilesService.MAX_UPLOAD_SIZE
+            }
         val directory = File(context.cacheDir, "multipart-uploads").apply { mkdirs() }
         val temporary = File(directory, UUID.randomUUID().toString())
         var fileName: String? = null
         var mime: String? = null
         var digest: String? = null
         var folder: String? = null
+        var parent: String? = null
+        var conflict = "fail"
         var sawFile = false
         var invalid = false
         try {
@@ -233,6 +268,13 @@ object KtorServer {
                                 "folder" ->
                                     if (kind != UploadKind.MEDIA || folder != null) invalid = true
                                     else folder = part.value
+                                "parent" ->
+                                    if (kind != UploadKind.FILES || parent != null) invalid = true
+                                    else parent = part.value
+                                "conflict" ->
+                                    if (kind != UploadKind.FILES || conflict != "fail")
+                                        invalid = true
+                                    else conflict = part.value
                                 else -> invalid = true
                             }
                         }
@@ -274,25 +316,30 @@ object KtorServer {
             )
                 throw InvalidMultipart()
             val result =
-                if (kind == UploadKind.MEDIA)
-                    MediaUploadStore(context)
-                        .publish(
-                            requestContext.app!!.id,
-                            fileName!!,
-                            mime!!,
-                            digest!!,
-                            temporary,
-                            folder,
-                        )
-                else
-                    MmsUploadStore(context)
-                        .stage(
-                            requestContext.app!!.id,
-                            fileName!!,
-                            mime!!,
-                            digest!!,
-                            temporary,
-                        )
+                when (kind) {
+                    UploadKind.MEDIA ->
+                        MediaUploadStore(context)
+                            .publish(
+                                requestContext.app!!.id,
+                                fileName!!,
+                                mime!!,
+                                digest!!,
+                                temporary,
+                                folder,
+                            )
+                    UploadKind.SMS ->
+                        MmsUploadStore(context)
+                            .stage(requestContext.app!!.id, fileName!!, mime!!, digest!!, temporary)
+                    UploadKind.FILES ->
+                        FilesService(context)
+                            .publishUpload(
+                                parent ?: throw InvalidMultipart(),
+                                fileName!!,
+                                digest!!,
+                                conflict,
+                                temporary,
+                            )
+                }
             respondJson(HttpStatusCode.OK, result)
         } catch (_: UploadTooLarge) {
             respondJson(413, "upload-too-large", "Upload exceeds the file-size limit")
@@ -306,6 +353,12 @@ object KtorServer {
             )
         } catch (error: MmsUploadStore.Invalid) {
             respondJson(400, error.code, "Invalid MMS attachment upload")
+        } catch (error: FilesService.Invalid) {
+            respondJson(
+                if (error.code == "conflict") 409 else 400,
+                error.code,
+                "Invalid file upload",
+            )
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
@@ -353,6 +406,7 @@ object KtorServer {
     private enum class UploadKind {
         MEDIA,
         SMS,
+        FILES,
     }
 
     private class UploadTooLarge : Exception()

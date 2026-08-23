@@ -25,6 +25,10 @@ class KtorRoutingTest {
                 "/api/sms/threads",
                 "/api/contacts/a%2Fb",
                 "/api/media/a%2Fb/content",
+                "/api/files/setup",
+                "/api/files/roots",
+                "/api/files/entries/a%2Fb/content",
+                "/api/files/jobs/a%2Fb",
                 "/api/sms/messages/a%2Fb",
                 "/api/apps/web",
                 "/api/apps/catalog",
@@ -75,6 +79,16 @@ class KtorRoutingTest {
                 setBody("malformed")
             }
         assertEquals(HttpStatusCode.Unauthorized, unauthorized.status)
+        assertEquals(
+            HttpStatusCode.Unauthorized,
+            client
+                .post("/api/files/uploads") {
+                    header(HttpHeaders.Host, "localhost:8080")
+                    header(HttpHeaders.ContentType, "not/a-multipart")
+                    setBody("malformed")
+                }
+                .status,
+        )
         assertEquals(
             HttpStatusCode.NotFound,
             client

@@ -9,11 +9,15 @@ import dev.omniand.hub.background.BackgroundHostingManager
 import dev.omniand.hub.background.PresenceTracker
 import dev.omniand.hub.contacts.ContactsEventBroadcaster
 import dev.omniand.hub.contacts.ContactsSetupManager
+import dev.omniand.hub.files.FilesEventBroadcaster
+import dev.omniand.hub.files.FilesJobManager
+import dev.omniand.hub.files.FilesSetupManager
 import dev.omniand.hub.media.MediaDeleteActivity
 import dev.omniand.hub.media.MediaEventBroadcaster
 import dev.omniand.hub.media.MediaSetupManager
 import dev.omniand.hub.permissions.PermissionManager
 import dev.omniand.hub.services.ContactsService
+import dev.omniand.hub.services.FilesService
 import dev.omniand.hub.services.MediaService
 import dev.omniand.hub.services.SmsService
 import dev.omniand.hub.settings.HubSettingsManager
@@ -349,6 +353,122 @@ object PlatformServer {
                 DesktopNavigationBar.script(),
                 CspBuilder.build(app),
             )
+        requiredFilesCapability(method, path)?.let { capability ->
+            if (!PermissionManager.hasCapability(context, app?.id, capability))
+                return codedError(403, "missing-capability", "Missing capability: $capability")
+        }
+        if (path == "/api/files/setup" && method == "GET") {
+            if (!hasFilesCapability(context, app))
+                return codedError(403, "missing-capability", "Missing Files capability")
+            return json(200, FilesSetupManager.state(context, isLocalWebView))
+        }
+        if (path == "/api/files/setup/request" && method == "POST") {
+            if (!hasFilesCapability(context, app))
+                return codedError(403, "missing-capability", "Missing Files capability")
+            if (!isLocalWebView)
+                return codedError(
+                    403,
+                    "phone-local-required",
+                    "Files access must be granted on the phone",
+                )
+            FilesSetupManager.request(context)
+            return json(200, JSONObject().put("opened", true))
+        }
+        if (path == "/api/files/events" && method == "GET") {
+            if (!PermissionManager.hasCapability(context, app?.id, "files.read"))
+                return codedError(403, "missing-capability", "Missing capability: files.read")
+            return PlatformContent.stream(
+                "200 OK",
+                "text/event-stream; charset=utf-8",
+                FilesEventBroadcaster::subscribe,
+                mapOf("Cache-Control" to "no-cache, no-transform", "X-Accel-Buffering" to "no"),
+            )
+        }
+        if (path == "/api/files/roots" && method == "GET")
+            return filesRead(context, app) { it.rootsJson() }
+        if (path == "/api/files/entries" && method == "GET")
+            return filesRead(context, app) {
+                it.list(
+                    query["parent"]
+                        ?: throw InvalidRequest(400, "parent-required", "parent is required"),
+                    query["offset"]?.toIntOrNull() ?: 0,
+                    query["limit"]?.toIntOrNull() ?: 100,
+                    query["sort"] ?: "name",
+                    query["direction"] ?: "asc",
+                )
+            }
+        if (path == "/api/files/search" && method == "GET")
+            return filesRead(context, app) {
+                it.search(
+                    query["root"] ?: throw InvalidRequest(400, "root-required", "root is required"),
+                    query["q"].orEmpty(),
+                    query["limit"]?.toIntOrNull() ?: 100,
+                )
+            }
+        if (path == "/api/files/recents" && method == "GET")
+            return filesRead(context, app) { it.recents(query["limit"]?.toIntOrNull() ?: 50) }
+        if (path == "/api/files/favorites" && method == "GET")
+            return filesRead(context, app) { it.favorites() }
+        if (path == "/api/files/favorites" && method == "POST")
+            return filesWrite(context, app) {
+                val document = requireJson(headers, body)
+                it.favorite(
+                    document.requiredString("id", 4096),
+                    document.requiredBoolean("favorite"),
+                )
+            }
+        if (path == "/api/files/folders" && method == "POST")
+            return filesWrite(context, app) {
+                val document = requireJson(headers, body)
+                it.createFolder(
+                    document.requiredString("parent", 4096),
+                    document.requiredString("name", 255),
+                )
+            }
+        if (path == "/api/files/rename" && method == "POST")
+            return filesWrite(context, app) {
+                val document = requireJson(headers, body)
+                it.rename(document.requiredString("id", 4096), document.requiredString("name", 255))
+            }
+        if (path == "/api/files/jobs" && method == "POST") {
+            if (!PermissionManager.hasCapability(context, app?.id, "files.write"))
+                return codedError(403, "missing-capability", "Missing capability: files.write")
+            return filesOperation {
+                val document = requireJson(headers, body)
+                val values = document.requiredStringArray("ids")
+                FilesJobManager.create(
+                    context,
+                    app!!.id,
+                    document.requiredString("operation", 16),
+                    List(values.length()) { values.getString(it) },
+                    document.optionalString("destination"),
+                    document.optionalString("conflict") ?: "fail",
+                )
+            }
+        }
+        val filesJob = Regex("^/api/files/jobs/([^/]+)$").matchEntire(path)
+        if (filesJob != null && method in setOf("GET", "DELETE")) {
+            if (!PermissionManager.hasCapability(context, app?.id, "files.write"))
+                return codedError(403, "missing-capability", "Missing capability: files.write")
+            val id = URLDecoder.decode(filesJob.groupValues[1], "UTF-8")
+            return filesOperation {
+                if (method == "DELETE") FilesJobManager.cancel(app!!.id, id)
+                else FilesJobManager.get(app!!.id, id)
+            }
+        }
+        val filesContentMatch = Regex("^/api/files/entries/([^/]+)/content$").matchEntire(path)
+        if (filesContentMatch != null && method == "GET")
+            return filesContent(
+                context,
+                app,
+                URLDecoder.decode(filesContentMatch.groupValues[1], "UTF-8"),
+                headers["range"],
+            )
+        val filesEntry = Regex("^/api/files/entries/([^/]+)$").matchEntire(path)
+        if (filesEntry != null && method == "GET")
+            return filesRead(context, app) {
+                it.details(URLDecoder.decode(filesEntry.groupValues[1], "UTF-8"))
+            }
         if (path == "/api/media/setup" && method == "GET") {
             if (!hasMediaCapability(context, app))
                 return codedError(403, "missing-capability", "Missing Media capability")
@@ -943,6 +1063,112 @@ object PlatformServer {
         PermissionManager.hasCapability(context, app?.id, "media.read") ||
             PermissionManager.hasCapability(context, app?.id, "media.write")
 
+    private fun hasFilesCapability(context: Context, app: WebApp?) =
+        PermissionManager.hasCapability(context, app?.id, "files.read") ||
+            PermissionManager.hasCapability(context, app?.id, "files.write")
+
+    /** Keeps read and write authority independent, including read-shaped job status requests. */
+    internal fun requiredFilesCapability(method: String, path: String): String? =
+        when {
+            path in setOf("/api/files/setup", "/api/files/setup/request") -> null
+            !path.startsWith("/api/files/") -> null
+            path == "/api/files/jobs" || path.startsWith("/api/files/jobs/") -> "files.write"
+            method == "GET" -> "files.read"
+            else -> "files.write"
+        }
+
+    private fun filesRead(
+        context: Context,
+        app: WebApp?,
+        operation: (FilesService) -> Any,
+    ): PlatformContent {
+        if (!PermissionManager.hasCapability(context, app?.id, "files.read"))
+            return codedError(403, "missing-capability", "Missing capability: files.read")
+        return filesOperation { operation(FilesService(context)) }
+    }
+
+    private fun filesWrite(
+        context: Context,
+        app: WebApp?,
+        operation: (FilesService) -> Any,
+    ): PlatformContent {
+        if (!PermissionManager.hasCapability(context, app?.id, "files.write"))
+            return codedError(403, "missing-capability", "Missing capability: files.write")
+        return filesOperation { operation(FilesService(context)) }
+    }
+
+    private fun filesOperation(operation: () -> Any): PlatformContent =
+        try {
+            json(200, operation())
+        } catch (error: InvalidRequest) {
+            throw error
+        } catch (error: FilesService.Invalid) {
+            val status =
+                when (error.code) {
+                    "not-found",
+                    "unknown-volume",
+                    "job-not-found" -> 404
+                    "files-access-required",
+                    "protected-path" -> 403
+                    "conflict" -> 409
+                    "too-many-jobs" -> 429
+                    else -> 400
+                }
+            codedError(status, error.code, filesMessage(error.code))
+        } catch (error: Exception) {
+            Log.e(TAG, "Files operation failed", error)
+            codedError(500, "files-failed", "Unable to access shared storage")
+        }
+
+    /** Streams file content with a single validated range and a hardened filename. */
+    private fun filesContent(
+        context: Context,
+        app: WebApp?,
+        id: String,
+        range: String?,
+    ): PlatformContent {
+        if (!PermissionManager.hasCapability(context, app?.id, "files.read"))
+            return codedError(403, "missing-capability", "Missing capability: files.read")
+        return try {
+            val resource = FilesService(context).content(id)
+            val parsed = parseRange(range, resource.length)
+            if (range != null && parsed == null) {
+                resource.stream.close()
+                return codedError(416, "invalid-range", "Invalid byte range")
+            }
+            val start = parsed?.first ?: 0L
+            val end = parsed?.last ?: (resource.length - 1)
+            var skipped = 0L
+            while (skipped < start) {
+                val count = resource.stream.skip(start - skipped)
+                if (count <= 0) break
+                skipped += count
+            }
+            val length = end - start + 1
+            val responseHeaders =
+                mutableMapOf(
+                    "Accept-Ranges" to "bytes",
+                    "Content-Length" to length.toString(),
+                    "Content-Disposition" to
+                        "inline; filename*=UTF-8''${java.net.URLEncoder.encode(resource.name, "UTF-8").replace("+", "%20")}",
+                    "ETag" to "W/\"${resource.modified}-${resource.length}\"",
+                )
+            if (parsed != null)
+                responseHeaders["Content-Range"] = "bytes $start-$end/${resource.length}"
+            PlatformContent.stream(
+                if (parsed == null) "200 OK" else "206 Partial Content",
+                resource.mimeType,
+                { LimitedInputStream(resource.stream, length) },
+                responseHeaders,
+            )
+        } catch (error: FilesService.Invalid) {
+            val status =
+                if (error.code in setOf("files-access-required", "protected-path")) 403
+                else if (error.code == "not-found") 404 else 400
+            codedError(status, error.code, filesMessage(error.code))
+        }
+    }
+
     private fun mediaRead(
         context: Context,
         app: WebApp?,
@@ -1126,6 +1352,22 @@ object PlatformServer {
             "staging-limit" -> "The active upload staging limit was reached"
             "file-count-limit" -> "At most 20 active uploads are allowed per application"
             else -> "Invalid media request"
+        }
+
+    private fun filesMessage(code: String) =
+        when (code) {
+            "files-access-required" -> "Android all-files access has not been granted on the phone"
+            "protected-path" -> "Android protects this application data directory"
+            "not-found",
+            "unknown-volume" -> "The file or storage volume is no longer available"
+            "conflict" -> "An item with that name already exists"
+            "insufficient-space" -> "The destination does not have enough free space"
+            "checksum-mismatch" -> "The uploaded file failed SHA-256 verification"
+            "symlink-not-allowed",
+            "path-escape",
+            "path-traversal" -> "The path is outside the selected storage volume"
+            "job-not-found" -> "The file operation was not found"
+            else -> "Invalid Files request"
         }
 
     private fun requireIfMatch(headers: Map<String, String>) =

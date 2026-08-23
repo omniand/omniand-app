@@ -34,6 +34,8 @@ object WebAppRegistry {
             "contacts.write",
             "media.read",
             "media.write",
+            "files.read",
+            "files.write",
         )
     @Volatile private var cached: List<WebApp>? = null
 

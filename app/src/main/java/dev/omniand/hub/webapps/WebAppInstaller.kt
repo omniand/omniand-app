@@ -26,6 +26,8 @@ object WebAppInstaller {
             "contacts.write",
             "media.read",
             "media.write",
+            "files.read",
+            "files.write",
         )
 
     data class Installed(

@@ -43,12 +43,13 @@ class WebAppActivity : Activity() {
                             fileResult = callback
                             return try {
                                 val chooser = params.createIntent()
-                                if (app.id == "gallery") {
+                                if (app.id in setOf("gallery", "files")) {
                                     chooser.type = "*/*"
-                                    chooser.putExtra(
-                                        Intent.EXTRA_MIME_TYPES,
-                                        arrayOf("image/*", "video/*"),
-                                    )
+                                    if (app.id == "gallery")
+                                        chooser.putExtra(
+                                            Intent.EXTRA_MIME_TYPES,
+                                            arrayOf("image/*", "video/*"),
+                                        )
                                     chooser.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
                                 } else {
                                     chooser.type = "image/*"

@@ -108,6 +108,8 @@ object StoreCatalog {
             "contacts.write",
             "media.read",
             "media.write",
+            "files.read",
+            "files.write",
         )
 
     fun fetch(catalogUrl: String = BuildConfig.CATALOG_URL): List<CatalogApp> {
