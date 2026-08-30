@@ -1,0 +1,268 @@
+package dev.omniand.hub.tunnel
+
+import android.util.Log
+import dev.omniand.hub.BuildConfig
+import dev.omniand.hub.server.PlatformServer
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.cio.CIO
+import io.ktor.client.plugins.websocket.WebSockets
+import io.ktor.client.plugins.websocket.webSocket
+import io.ktor.websocket.Frame
+import io.ktor.websocket.readBytes
+import java.net.Socket
+import java.net.URI
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
+/** Owns one non-reconnecting POC tunnel and all loopback sockets opened by that connection. */
+class RelayTunnelClient(private val scope: CoroutineScope, private val relayUrl: String) {
+    private val streams = ConcurrentHashMap<Long, LocalStream>()
+    private val stopped = AtomicBoolean(false)
+    private val client = HttpClient(CIO) { install(WebSockets) }
+
+    fun start(): Job = scope.launch { runTunnel() }
+
+    fun stop() {
+        if (!stopped.compareAndSet(false, true)) return
+        streams.values.forEach(LocalStream::close)
+        streams.clear()
+        client.close()
+    }
+
+    /** Runs one WebSocket session; reconnection intentionally belongs to a later milestone. */
+    private suspend fun runTunnel() {
+        try {
+            val uri = URI(relayUrl)
+            require(uri.scheme == "wss" || (BuildConfig.DEBUG && uri.scheme == "ws")) {
+                "The relay must use wss://; ws:// is accepted only in debug builds"
+            }
+            client.webSocket(urlString = relayUrl) {
+                val output = Channel<ByteArray>(capacity = 64)
+                coroutineScope {
+                    val writer = launch {
+                        send(Frame.Binary(fin = true, data = TunnelProtocol.hello()))
+                        for (encoded in output) send(Frame.Binary(fin = true, data = encoded))
+                    }
+                    val keepAlive = launch {
+                        while (isActive) {
+                            delay(30_000)
+                            output.send(TunnelProtocol.encode(TunnelFrame.Ping(byteArrayOf())))
+                        }
+                    }
+                    try {
+                        for (message in incoming) {
+                            require(message is Frame.Binary) { "tunnel messages must be binary" }
+                            dispatch(TunnelProtocol.decode(message.readBytes()), output)
+                        }
+                    } finally {
+                        output.close()
+                        keepAlive.cancel()
+                        writer.cancel()
+                    }
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.w(TAG, "Relay tunnel ended", error)
+        } finally {
+            streams.values.forEach(LocalStream::close)
+            streams.clear()
+        }
+    }
+
+    private suspend fun dispatch(frame: TunnelFrame, output: Channel<ByteArray>) {
+        when (frame) {
+            is TunnelFrame.Open -> open(frame.streamId, output)
+            is TunnelFrame.Data -> {
+                val local = stream(frame.streamId)
+                local.receiveWindow.consume(frame.payload.size)
+                local.incoming.send(StreamEvent.Data(frame.payload))
+            }
+            is TunnelFrame.Fin -> stream(frame.streamId).incoming.send(StreamEvent.Fin)
+            is TunnelFrame.Reset -> streams.remove(frame.streamId)?.close()
+            is TunnelFrame.WindowUpdate -> stream(frame.streamId).credit.release(frame.credit)
+            is TunnelFrame.Ping ->
+                output.send(TunnelProtocol.encode(TunnelFrame.Pong(frame.payload)))
+            is TunnelFrame.Pong -> Unit
+        }
+    }
+
+    /** Opens one bounded loopback stream, or explicitly resets it when local setup fails. */
+    private suspend fun open(streamId: Long, output: Channel<ByteArray>) {
+        if (streams.size >= TUNNEL_MAX_STREAMS || streams.containsKey(streamId)) {
+            output.send(TunnelProtocol.encode(TunnelFrame.Reset(streamId)))
+            return
+        }
+        val socket =
+            runCatching {
+                    Socket().apply {
+                        tcpNoDelay = true
+                        connect(java.net.InetSocketAddress("127.0.0.1", PlatformServer.PORT), 5_000)
+                    }
+                }
+                .getOrElse {
+                    output.send(TunnelProtocol.encode(TunnelFrame.Reset(streamId)))
+                    return
+                }
+        val local = LocalStream(socket)
+        if (streams.putIfAbsent(streamId, local) != null) {
+            local.close()
+            output.send(TunnelProtocol.encode(TunnelFrame.Reset(streamId)))
+            return
+        }
+        scope.launch {
+            try {
+                coroutineScope {
+                    listOf(
+                            launch { copyFromSocket(streamId, local, output) },
+                            launch { copyToSocket(streamId, local, output) },
+                        )
+                        .joinAll()
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                runCatching { output.send(TunnelProtocol.encode(TunnelFrame.Reset(streamId))) }
+            } finally {
+                streams.remove(streamId, local)
+                local.close()
+            }
+        }
+    }
+
+    private suspend fun copyFromSocket(
+        streamId: Long,
+        local: LocalStream,
+        output: Channel<ByteArray>,
+    ) {
+        val buffer = ByteArray(TUNNEL_MAX_DATA)
+        while (true) {
+            val count = local.socket.getInputStream().read(buffer)
+            if (count < 0) {
+                output.send(TunnelProtocol.encode(TunnelFrame.Fin(streamId)))
+                return
+            }
+            if (count == 0) continue
+            local.credit.acquire(count)
+            output.send(
+                TunnelProtocol.encode(TunnelFrame.Data(streamId, buffer.copyOfRange(0, count)))
+            )
+        }
+    }
+
+    private suspend fun copyToSocket(
+        streamId: Long,
+        local: LocalStream,
+        output: Channel<ByteArray>,
+    ) {
+        for (event in local.incoming) {
+            when (event) {
+                is StreamEvent.Data -> {
+                    local.socket.getOutputStream().write(event.payload)
+                    local.receiveWindow.release(event.payload.size)
+                    output.send(
+                        TunnelProtocol.encode(
+                            TunnelFrame.WindowUpdate(streamId, event.payload.size)
+                        )
+                    )
+                }
+                StreamEvent.Fin -> {
+                    local.socket.shutdownOutput()
+                    return
+                }
+            }
+        }
+    }
+
+    private fun stream(streamId: Long): LocalStream =
+        streams[streamId] ?: error("frame references an unknown stream")
+
+    private class LocalStream(val socket: Socket) {
+        val incoming = Channel<StreamEvent>(capacity = 32)
+        val credit = FlowCredit()
+        val receiveWindow = ReceiveWindow()
+
+        fun close() {
+            incoming.close()
+            runCatching { socket.close() }
+        }
+    }
+
+    private sealed interface StreamEvent {
+        data class Data(val payload: ByteArray) : StreamEvent
+
+        data object Fin : StreamEvent
+    }
+
+    /** Suspends socket reads before more than the negotiated per-stream window is in flight. */
+    private class FlowCredit {
+        private val mutex = Mutex()
+        private val changed = Channel<Unit>(Channel.CONFLATED)
+        private var available = TUNNEL_INITIAL_WINDOW
+
+        suspend fun acquire(count: Int) {
+            while (true) {
+                val acquired = mutex.withLock {
+                    if (available >= count) {
+                        available -= count
+                        true
+                    } else {
+                        false
+                    }
+                }
+                if (acquired) return
+                changed.receive()
+            }
+        }
+
+        suspend fun release(count: Int) {
+            mutex.withLock {
+                require(
+                    count in 1..TUNNEL_INITIAL_WINDOW && available + count <= TUNNEL_INITIAL_WINDOW
+                ) {
+                    "flow-control window overflow"
+                }
+                available += count
+            }
+            changed.trySend(Unit)
+        }
+    }
+
+    /** Rejects a peer that sends more bytes than this side has acknowledged as consumed. */
+    private class ReceiveWindow {
+        private val mutex = Mutex()
+        private var available = TUNNEL_INITIAL_WINDOW
+
+        suspend fun consume(count: Int) {
+            mutex.withLock {
+                require(count in 1..available) { "peer exceeded the receive window" }
+                available -= count
+            }
+        }
+
+        suspend fun release(count: Int) {
+            mutex.withLock {
+                require(available + count <= TUNNEL_INITIAL_WINDOW) {
+                    "receive window overflow"
+                }
+                available += count
+            }
+        }
+    }
+
+    private companion object {
+        const val TAG = "OmniAndTunnel"
+    }
+}

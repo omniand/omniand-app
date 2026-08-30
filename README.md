@@ -23,10 +23,11 @@ and Messages send a single `multipart/form-data` request per upload; the server 
 bounded temporary storage, verifies its SHA-256 digest, and removes temporary data on every outcome.
 Gallery accepts files through 500 MiB, while one staged MMS attachment is limited to 10 MiB.
 
-For desktop access, wildcard DNS must point the configured canonical hostname and its subdomains at
-the phone. The embedded server listens on cleartext HTTP port 8080, so a trusted TLS reverse proxy
-must terminate HTTPS and preserve the original `Host` header. The cleartext listener must not be
-exposed to an untrusted network.
+For remote desktop access, wildcard DNS points the configured canonical hostname and its subdomains
+at the separately deployed [OmniAndRelay](../omniAndRelay/README.md) edge. An opted-in Android
+foreground service opens one outbound WebSocket tunnel whose multiplexed streams connect to the
+existing loopback HTTP server. The relay is byte-transparent and preserves each request's canonical
+`Host` header for the existing origin and pairing checks.
 
 An unknown desktop receives a pairing page. Requesting access displays an Android notification, or
 an approval dialog directly when OmniAnd is foregrounded. The phone owner reviews the socket peer
@@ -90,49 +91,22 @@ Open **OmniAnd** from the user's normal Android launcher. Installing an applicat
 
 The development catalog URL is configured with `CATALOG_URL` in `app/build.gradle.kts`. Its current HTTP value is intended only for trusted local development; production-like deployments should use HTTPS.
 
-## Desktop development proxy
+## Relay integration
 
-The repository includes a variable-driven Caddy proxy in [`compose.yaml`](compose.yaml). Its
-Caddyfile and example environment contain no private material; `.env` and `.tls/` are ignored.
+The Rust service, Caddy/Compose deployment, protocol documentation, and server tests live in the
+sibling [`../omniAndRelay`](../omniAndRelay/README.md) repository. Export its
+`OMNIAND_PLATFORM_HOST` and `OMNIAND_RELAY_URL` values before building this Android client.
 
-Create the local configuration and export the same values for Gradle:
+The relay URL comes from Gradle property `omniandRelayUrl` or environment variable
+`OMNIAND_RELAY_URL`; it defaults to
+`wss://relay.<platform-host>/_omniand/tunnel/v1`. Release builds reject cleartext. Debug builds may
+use `ws://10.0.2.2:18082/_omniand/tunnel/v1` for an emulator. Enable **Background hosting** only
+after installing the build. The foreground service starts the Platform server first, then makes one
+tunnel connection attempt. Disabling the setting closes the tunnel and all relay-created loopback
+sockets immediately.
 
-```sh
-cp .env.example .env
-set -a
-. ./.env
-set +a
-```
-
-Generate and trust a development certificate on the desktop:
-
-```sh
-mkcert -install
-mkdir -p "$OMNIAND_CERT_DIR"
-mkcert \
-  -cert-file "$OMNIAND_CERT_DIR/$OMNIAND_CERT_FILE" \
-  -key-file "$OMNIAND_CERT_DIR/$OMNIAND_KEY_FILE" \
-  "$OMNIAND_PLATFORM_HOST" \
-  "*.$OMNIAND_PLATFORM_HOST"
-chmod 600 "$OMNIAND_CERT_DIR/$OMNIAND_KEY_FILE"
-```
-
-Build with that domain, forward an emulator, and start the proxy:
-
-```sh
-./gradlew assembleDebug
-adb -s emulator-5554 forward tcp:18080 tcp:8080
-docker compose up -d
-```
-
-`OMNIAND_BACKEND` defaults to the host's ADB-forwarded `127.0.0.1:18080`. Set it to a reachable
-phone address such as `192.0.2.10:8080` when using a physical device. The Compose service uses host
-networking, so do not add published ports. Inspect or stop it with:
-
-```sh
-docker compose logs -f desktop-proxy
-docker compose down
-```
+The Phase 1 relay accepts one fixed `poc-device` identity but does not authenticate it. Existing
+desktop pairing still gates Platform content, but it does not authenticate the phone to the relay.
 
 ## Formatting
 
@@ -162,10 +136,12 @@ Android grants the required role and permissions, while Permission test receives
 Verify Shell Discover catalog operations, multipart uploads and cancellation, file selection, and multiple events over one SSE
 connection. Disable Wi-Fi and mobile data and confirm loopback operation continues. Raw, cross-host,
 alternate-port, and non-loopback `.localhost` requests must receive `401`. For desktop testing,
-configure wildcard DNS and trusted TLS termination, open the configured canonical Home, request
-access, and approve it on the phone. Confirm APIs return `401` before approval, Platform and app
-subdomains work afterward, denial never creates a session, and stopping OmniAnd requires pairing
-again.
+configure wildcard DNS and trusted TLS termination, enable background hosting, and confirm exactly
+one outbound tunnel connects. Open the configured canonical Home, request access, and approve it on
+the phone. Confirm APIs return `401` before approval; Platform and app subdomains work afterward;
+GET, large POST/upload, multi-megabyte response, at least 20 concurrent requests, and SSE survive the
+tunnel; denial never creates a session; and disabling hosting immediately removes remote access
+without breaking loopback WebViews. Permission Test must still receive `403` from `/api/sms`.
 
 For wrapper validation, install an app from Shell's Discover tab, approve Android's package-installer flow, and verify that a launcher entry appears and that its Web files work offline through the canonical origin. Installing a newer catalog package should atomically update the same Android package and retain browser origin data.
 
@@ -176,4 +152,6 @@ permission checks, and server-generated CSP are all required. CSP includes `form
 CORS remains denied by default, and third-party WebView cookies are disabled. Desktop traffic
 requires a separately approved, process-lifetime session; Host identity alone never authorizes it.
 Generated wrappers are signed, but downloaded Web packages are not yet cryptographically verified.
-There is no embedded LAN TLS; keep port 8080 on a trusted development network only.
+There is no embedded LAN TLS; keep port 8080 on a trusted development network only. The external
+Phase 1 relay's fixed identity is identification rather than authentication, and reconnect and
+durable-link work remain deferred.

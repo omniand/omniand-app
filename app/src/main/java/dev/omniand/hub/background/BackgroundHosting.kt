@@ -20,10 +20,15 @@ import androidx.core.content.ContextCompat
 import dev.omniand.hub.MainActivity
 import dev.omniand.hub.R
 import dev.omniand.hub.server.PlatformServer
+import dev.omniand.hub.tunnel.RelayTunnelClient
 import java.io.InputStream
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 
 /** Persists opt-in hosting and coordinates its foreground-service lifecycle. */
 object BackgroundHostingManager {
@@ -221,6 +226,8 @@ internal class PresenceLeasePolicy {
 /** Keeps the phone-hosted HTTP endpoint alive after the Hub activity leaves the foreground. */
 class BackgroundHostingService : Service() {
     private var serverAvailable = false
+    private val tunnelScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var tunnelClient: RelayTunnelClient? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -228,6 +235,10 @@ class BackgroundHostingService : Service() {
         startForeground(NOTIFICATION_ID, notification())
         serverAvailable = PlatformServer.start(applicationContext)
         if (serverAvailable) {
+            tunnelClient =
+                RelayTunnelClient(tunnelScope, dev.omniand.hub.BuildConfig.RELAY_URL).also {
+                    it.start()
+                }
             BackgroundHostingManager.serviceStarted(applicationContext)
         } else {
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -250,6 +261,9 @@ class BackgroundHostingService : Service() {
     }
 
     override fun onDestroy() {
+        tunnelClient?.stop()
+        tunnelClient = null
+        tunnelScope.cancel()
         BackgroundHostingManager.serviceStopped()
         super.onDestroy()
     }

@@ -1,4 +1,0 @@
-{$OMNIAND_PLATFORM_HOST}, *.{$OMNIAND_PLATFORM_HOST} {
-	tls /certs/{$OMNIAND_CERT_FILE} /certs/{$OMNIAND_KEY_FILE}
-	reverse_proxy {$OMNIAND_BACKEND}
-}

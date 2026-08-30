@@ -133,7 +133,7 @@ For the project, verify all of the following on an Android device or AVD:
 
 ## Scope control
 
-Preserve Platform Home's server-resolved catalog/package installation path, SMS read/send/modify support, incoming-message handling, notifications, and generic wrapper generation. Do not add calls, cloud synchronization, remote Internet access, JavaScript compatibility layers, WebRTC, WebSockets, MMS completion, or advanced package management unless explicitly requested. Catalog Web packages are installed only as assets in their generated wrappers; do not also store private file-backed copies.
+Preserve Platform Home's server-resolved catalog/package installation path, SMS read/send/modify support, incoming-message handling, notifications, and generic wrapper generation. Do not add calls, cloud synchronization, remote Internet access, JavaScript compatibility layers, MMS completion, or advanced package management unless explicitly requested. Catalog Web packages are installed only as assets in their generated wrappers; do not also store private file-backed copies.
 
 OmniAnd is an actively developed, production-oriented platform. Describe limitations using their concrete security, deployment, feature, or validation status rather than applying a general maturity label.
 

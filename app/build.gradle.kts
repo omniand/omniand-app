@@ -30,6 +30,12 @@ val platformHost =
         .orElse("phone.example.org")
         .get()
         .lowercase()
+val relayUrl =
+    providers
+        .gradleProperty("omniandRelayUrl")
+        .orElse(providers.environmentVariable("OMNIAND_RELAY_URL"))
+        .orElse("wss://relay.$platformHost/_omniand/tunnel/v1")
+        .get()
 
 check(
     platformHost.length <= 253 &&
@@ -40,6 +46,14 @@ check(
         )
 ) {
     "omniandPlatformHost must be a lowercase DNS hostname"
+}
+
+check(relayUrl.startsWith("wss://") || relayUrl.startsWith("ws://")) {
+    "omniandRelayUrl must use wss:// or ws://"
+}
+
+check(relayUrl.matches(Regex("wss?://[^\\s\\\"]+"))) {
+    "omniandRelayUrl must be a single valid URL value"
 }
 
 val buildPlatformShell by
@@ -81,6 +95,7 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         buildConfigField("String", "PLATFORM_HOST", "\"$platformHost\"")
+        buildConfigField("String", "RELAY_URL", "\"${relayUrl.replace("\"", "\\\"")}\"")
         buildConfigField("String", "CATALOG_URL", "\"http://192.168.1.11:5173/\"")
     }
 
@@ -118,6 +133,8 @@ dependencies {
     implementation("com.android.tools.build:apksig:8.7.3")
     implementation("io.ktor:ktor-server-cio:3.3.1")
     implementation("io.ktor:ktor-server-core:3.3.1")
+    implementation("io.ktor:ktor-client-cio:3.3.1")
+    implementation("io.ktor:ktor-client-websockets:3.3.1")
     runtimeOnly("org.slf4j:slf4j-nop:2.0.17")
     testImplementation("junit:junit:4.13.2")
     testImplementation("io.ktor:ktor-server-test-host:3.3.1")
