@@ -12,18 +12,17 @@ catalog are in the sibling [`../omniAndStore`](../omniAndStore), and the remote 
 - Expose Android capabilities only through standard same-origin HTTP APIs. Do not add
   `addJavascriptInterface`, request interception, or native calls from Web content.
 - Keep app isolation on separate hostnames, with server-generated CSP and independent Android and
-  Web capability checks. Protected APIs deny by default; Permission Test must receive `403` from
-  `/api/sms`.
-- The Shell is embedded from `../omniAndStore/apps/shell/`; pairing is embedded separately from
-  `../omniAndStore/platform/pairing/`. Do not add catalog apps to Platform assets.
+  Web capability checks. Protected APIs deny by default; OmniAnd Test's Permission Isolation checks
+  must receive `403` from `/api/sms`.
+- The Shell is embedded from `../omniAndStore/apps/shell/`; the public pairing portal belongs to the
+  relay. Do not add catalog apps or pairing assets to Platform assets.
 - `wrappers/template/` is generic. Install validates a catalog package, injects it under
   `assets/webapp/`, rewrites the manifest/icon, signs it with the Android Keystore wrapper key,
   and installs it through `PackageInstaller`.
 
 Android WebViews use authenticated loopback HTTP with exact `.localhost:8080` hosts; desktop uses
-canonical HTTPS hosts. Do not replace host isolation with paths or weaken Origin/session checks.
-The cleartext LAN listener is development-only. The Phase 1 relay identity is identification, not
-authentication.
+stable link-derived HTTPS hosts. Do not replace host isolation with paths or weaken Origin/session
+checks. The cleartext LAN listener is development-only.
 
 ## Development and validation
 

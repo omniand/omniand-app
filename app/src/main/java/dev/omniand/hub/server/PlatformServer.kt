@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import dev.omniand.hub.BuildConfig
-import dev.omniand.hub.DesktopPairingNotifications
 import dev.omniand.hub.background.BackgroundHostingManager
 import dev.omniand.hub.background.PresenceTracker
 import dev.omniand.hub.contacts.ContactsEventBroadcaster
@@ -15,6 +14,7 @@ import dev.omniand.hub.files.FilesSetupManager
 import dev.omniand.hub.media.MediaDeleteActivity
 import dev.omniand.hub.media.MediaEventBroadcaster
 import dev.omniand.hub.media.MediaSetupManager
+import dev.omniand.hub.pairing.RemoteLinkSession
 import dev.omniand.hub.permissions.PermissionManager
 import dev.omniand.hub.services.ContactsService
 import dev.omniand.hub.services.FilesService
@@ -93,15 +93,7 @@ object PlatformServer {
                 method,
                 requestPath,
                 normalizedHeaders,
-            )
-                ?: return desktopPairingResponse(
-                    context,
-                    method,
-                    requestPath,
-                    authority,
-                    peerAddress,
-                    normalizedHeaders,
-                ) ?: codedError(401, "authentication-required", "Unauthorized")
+            ) ?: return codedError(401, "authentication-required", "Unauthorized")
         return try {
             route(
                 context,
@@ -131,11 +123,16 @@ object PlatformServer {
         val port = parsed.second
         val localhost = hostname == "localhost" || hostname.endsWith(".localhost")
         if (!localhost) {
-            val app = WebAppRegistry.byCanonicalHost(context, hostname)
+            val stableHost =
+                RemoteLinkSession.parseHost(hostname, BuildConfig.PLATFORM_HOST) ?: return null
+            val app =
+                if (stableHost.appId == "platform") null
+                else
+                    WebAppRegistry.apps(context).firstOrNull { it.id == stableHost.appId }
+                        ?: return null
             if (
-                (hostname != BuildConfig.PLATFORM_HOST && app == null) ||
-                    port !in setOf(null, 443) ||
-                    !DesktopPairing.verify(headers["cookie"])
+                port !in setOf(null, 443) ||
+                    !RemoteLinkSession.verify(context, stableHost, headers["cookie"])
             )
                 return null
             if (
@@ -187,89 +184,6 @@ object PlatformServer {
 
     internal fun canReadDesktopPresence(request: PlatformRequestContext): Boolean =
         !request.phoneClient && request.transport == PlatformRequestContext.Transport.DESKTOP_HTTP
-
-    /** Serves only the bounded unauthenticated handshake on the configured canonical Home host. */
-    private fun desktopPairingResponse(
-        context: Context,
-        method: String,
-        path: String,
-        authority: String,
-        peerAddress: String,
-        headers: Map<String, String>,
-    ): PlatformContent? {
-        val parsed = parseAuthority(authority) ?: return null
-        val hostname = parsed.first
-        if (hostname == "localhost" || hostname.endsWith(".localhost")) return null
-        val canonicalApp = WebAppRegistry.byCanonicalHost(context, hostname)
-        if (
-            (hostname != BuildConfig.PLATFORM_HOST && canonicalApp == null) ||
-                parsed.second !in setOf(null, 443)
-        )
-            return null
-        val pairingAsset = if (method == "GET") pairingAssetPath(path) else null
-        if (pairingAsset != null) {
-            val bytes = context.assets.open("web/pairing/$pairingAsset").use { it.readBytes() }
-            return PlatformContent(
-                "200 OK",
-                mime(pairingAsset),
-                bytes,
-                CspBuilder.buildPairing(),
-            )
-        }
-        if (path == "/api/pairing/request" && method == "POST") {
-            if (headers["origin"] != "https://$hostname") return null
-            val request =
-                DesktopPairing.requestId(headers["cookie"])?.let(DesktopPairing::pending)
-                    ?: try {
-                        DesktopPairing.create(peerAddress, headers["user-agent"].orEmpty())
-                    } catch (_: DesktopPairing.Throttled) {
-                        return codedError(429, "pairing-rate-limited", "Try again later")
-                    }
-            DesktopPairingNotifications.publish(context, request)
-            return PlatformContent.bytes(
-                "202 Accepted",
-                "application/json; charset=utf-8",
-                JSONObject().put("pending", true).toString().toByteArray(),
-                mapOf(
-                    "Set-Cookie" to
-                        "${DesktopPairing.REQUEST_COOKIE}=${request.id}; Path=/api/pairing; " +
-                            "HttpOnly; Secure; SameSite=Strict"
-                ),
-            )
-        }
-        if (path == "/api/pairing/status" && method == "GET") {
-            val id =
-                DesktopPairing.requestId(headers["cookie"])
-                    ?: return codedError(400, "pairing-request-missing", "Pairing request missing")
-            val claim = DesktopPairing.claim(id)
-            val body = JSONObject().put("status", claim.decision.name.lowercase())
-            val responseHeaders =
-                claim.token?.let {
-                    mapOf(
-                        "Set-Cookie" to
-                            "${DesktopPairing.SESSION_COOKIE}=$it; Domain=${BuildConfig.PLATFORM_HOST}; " +
-                                "Path=/; HttpOnly; Secure; SameSite=Strict"
-                    )
-                } ?: emptyMap()
-            return PlatformContent.bytes(
-                "200 OK",
-                "application/json; charset=utf-8",
-                body.toString().toByteArray(),
-                responseHeaders,
-            )
-        }
-        return null
-    }
-
-    /** Maps the complete and intentionally small pre-authentication pairing asset surface. */
-    internal fun pairingAssetPath(path: String): String? =
-        when {
-            path == "/" -> "index.html"
-            path in setOf("/pairing.js", "/pairing.css", "/i18n.js") -> path.removePrefix("/")
-            path.matches(Regex("^/locales/(?:en|fr)\\.json$")) -> path.removePrefix("/")
-            path == "/vendor/i18next/i18next.min.js" -> path.removePrefix("/")
-            else -> null
-        }
 
     internal fun parseAuthority(authority: String): Pair<String, Int?>? {
         val value = authority.trim().lowercase()
@@ -325,6 +239,12 @@ object PlatformServer {
             BackgroundHostingManager.setEnabled(context, enabled)
             if (enabled) BackgroundHostingManager.requestAccess(context)
             return json(200, HubSettingsManager.state(context).getJSONObject("backgroundHosting"))
+        }
+        if (path == "/api/hub/connect-computer" && method == "POST") {
+            if (!isLocalPlatformHome)
+                return codedError(403, "phone-local-required", "Computer pairing is phone-local")
+            HubSettingsManager.connectComputer(context)
+            return json(200, JSONObject().put("opened", true))
         }
         if (path == "/api/hub/presence" && method == "GET") {
             if (!canReadDesktopPresence(request))
@@ -833,8 +753,13 @@ object PlatformServer {
                                         when {
                                             isLocalWebView ->
                                                 WebAppRegistry.localhostOriginFor(item)
-                                            host == BuildConfig.PLATFORM_HOST ->
-                                                WebAppRegistry.originFor(item)
+                                            RemoteLinkSession.parseHost(
+                                                host,
+                                                BuildConfig.PLATFORM_HOST,
+                                            ) != null ->
+                                                "https://connect.${BuildConfig.PLATFORM_HOST}/open/${
+                                                    checkNotNull(RemoteLinkSession.parseHost(host, BuildConfig.PLATFORM_HOST)).publicLinkId
+                                                }/${item.id}"
                                             else ->
                                                 WebAppRegistry.developmentOriginFor(
                                                     item,

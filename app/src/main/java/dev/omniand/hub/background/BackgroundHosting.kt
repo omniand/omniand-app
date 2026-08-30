@@ -73,6 +73,14 @@ object BackgroundHostingManager {
         )
     }
 
+    fun reconnect(context: Context) {
+        ContextCompat.startForegroundService(
+            context,
+            Intent(context, BackgroundHostingService::class.java)
+                .setAction(BackgroundHostingService.ACTION_RECONNECT),
+        )
+    }
+
     fun requestAccess(context: Context) {
         context.startActivity(
             Intent(context, BackgroundHostingSetupActivity::class.java)
@@ -236,9 +244,14 @@ class BackgroundHostingService : Service() {
         serverAvailable = PlatformServer.start(applicationContext)
         if (serverAvailable) {
             tunnelClient =
-                RelayTunnelClient(tunnelScope, dev.omniand.hub.BuildConfig.RELAY_URL).also {
-                    it.start()
-                }
+                RelayTunnelClient(
+                        applicationContext,
+                        tunnelScope,
+                        dev.omniand.hub.BuildConfig.RELAY_URL,
+                    )
+                    .also {
+                        it.start()
+                    }
             BackgroundHostingManager.serviceStarted(applicationContext)
         } else {
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -252,6 +265,16 @@ class BackgroundHostingService : Service() {
             BackgroundHostingManager.setEnabled(this, false)
             stopSelf()
             return START_NOT_STICKY
+        }
+        if (intent?.action == ACTION_RECONNECT) {
+            tunnelClient?.stop()
+            tunnelClient =
+                RelayTunnelClient(
+                        applicationContext,
+                        tunnelScope,
+                        dev.omniand.hub.BuildConfig.RELAY_URL,
+                    )
+                    .also { it.start() }
         }
         if (!BackgroundHostingManager.isEnabled(this)) {
             stopSelf()
@@ -312,6 +335,7 @@ class BackgroundHostingService : Service() {
         private const val CHANNEL = "background-hosting"
         private const val NOTIFICATION_ID = 7401
         private const val ACTION_STOP = "dev.omniand.hub.STOP_BACKGROUND_HOSTING"
+        internal const val ACTION_RECONNECT = "dev.omniand.hub.RECONNECT_TUNNEL"
     }
 }
 

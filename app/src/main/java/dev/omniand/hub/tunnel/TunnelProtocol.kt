@@ -7,7 +7,6 @@ internal const val TUNNEL_PROTOCOL_VERSION = 1
 internal const val TUNNEL_MAX_DATA = 16 * 1024
 internal const val TUNNEL_INITIAL_WINDOW = 256 * 1024
 internal const val TUNNEL_MAX_STREAMS = 32
-internal const val TUNNEL_DEVICE_ID = "poc-device"
 
 internal sealed interface TunnelFrame {
     val streamId: Long
@@ -51,8 +50,9 @@ internal object TunnelProtocol {
     private val helloMagic = byteArrayOf(0x4f, 0x4d, 0x4e, 0x49, 0x41, 0x4e, 0x44, 0)
     private const val HEADER_LENGTH = 10
 
-    fun hello(): ByteArray {
-        val identity = TUNNEL_DEVICE_ID.toByteArray(Charsets.UTF_8)
+    fun hello(deviceId: String): ByteArray {
+        val identity = deviceId.toByteArray(Charsets.UTF_8)
+        require(identity.isNotEmpty() && identity.size <= 128) { "invalid device ID" }
         return ByteBuffer.allocate(10 + identity.size)
             .put(helloMagic)
             .put(TUNNEL_PROTOCOL_VERSION.toByte())
@@ -61,7 +61,7 @@ internal object TunnelProtocol {
             .array()
     }
 
-    fun validateHello(hello: ByteArray) {
+    fun validateHello(hello: ByteArray, expectedDeviceId: String) {
         require(hello.size >= 10) { "hello is truncated" }
         require(hello.copyOfRange(0, 8).contentEquals(helloMagic)) { "hello magic is invalid" }
         require((hello[8].toInt() and 0xff) == TUNNEL_PROTOCOL_VERSION) {
@@ -69,8 +69,8 @@ internal object TunnelProtocol {
         }
         val identityLength = hello[9].toInt() and 0xff
         require(hello.size == 10 + identityLength) { "hello length mismatch" }
-        require(hello.copyOfRange(10, hello.size).contentEquals(TUNNEL_DEVICE_ID.toByteArray())) {
-            "unknown POC device"
+        require(hello.copyOfRange(10, hello.size).contentEquals(expectedDeviceId.toByteArray())) {
+            "HELLO device ID mismatch"
         }
     }
 

@@ -2,6 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.READ_SMS" />
     <uses-permission android:name="android.permission.SEND_SMS" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
@@ -61,9 +62,7 @@
             android:name="dev.omniand.launcher.WebAppActivity"
             android:exported="true"
             android:targetActivity=".WebAppActivity" />
-        <activity
-            android:name=".DesktopPairingApprovalActivity"
-            android:exported="false" />
+        <activity android:name=".pairing.ConnectComputerActivity" android:exported="false" />
         <activity
             android:name=".sms.SmsSetupActivity"
             android:exported="false" />

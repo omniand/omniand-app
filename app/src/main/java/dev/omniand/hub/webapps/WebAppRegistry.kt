@@ -60,6 +60,9 @@ object WebAppRegistry {
 
     fun originFor(app: WebApp): String = "https://${app.id}.${BuildConfig.PLATFORM_HOST}"
 
+    fun stableOriginFor(app: WebApp, publicLinkId: String): String =
+        "https://${app.id}-$publicLinkId.${BuildConfig.PLATFORM_HOST}"
+
     fun localhostOriginFor(app: WebApp): String = "http://${app.id}.localhost:8080"
 
     fun developmentOriginFor(app: WebApp, baseHost: String, port: Int): String =

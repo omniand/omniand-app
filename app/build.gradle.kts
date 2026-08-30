@@ -21,8 +21,6 @@ val webProject = rootProject.layout.projectDirectory.dir("../omniAndStore")
 val platformShellSource = rootProject.layout.projectDirectory.dir("../omniAndStore/apps/shell")
 val platformShellOutput =
     rootProject.layout.projectDirectory.dir("../omniAndStore/build/embedded/shell")
-val platformPairingSource =
-    rootProject.layout.projectDirectory.dir("../omniAndStore/platform/pairing")
 val platformHost =
     providers
         .gradleProperty("omniandPlatformHost")
@@ -71,14 +69,10 @@ val syncEmbeddedWeb by
     tasks.registering(Sync::class) {
         dependsOn(buildPlatformShell)
         inputs.dir(platformShellOutput)
-        inputs.dir(platformPairingSource)
         from(platformShellOutput) { into("web/shell") }
-        from(platformPairingSource) { into("web/pairing") }
         into(layout.buildDirectory.dir("generated/embeddedWebAssets"))
         doFirst {
-            check(
-                platformShellSource.asFile.isDirectory && platformPairingSource.asFile.isDirectory
-            ) {
+            check(platformShellSource.asFile.isDirectory) {
                 "Platform Home source is missing at ${platformShellSource.asFile}"
             }
         }
@@ -130,9 +124,16 @@ tasks.named("preBuild").configure { dependsOn(bundleWrapperTemplate, syncEmbedde
 
 dependencies {
     implementation("androidx.core:core:1.15.0")
+    implementation("androidx.activity:activity-ktx:1.10.1")
+    implementation("androidx.camera:camera-camera2:1.4.2")
+    implementation("androidx.camera:camera-lifecycle:1.4.2")
+    implementation("androidx.camera:camera-view:1.4.2")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
     implementation("com.android.tools.build:apksig:8.7.3")
     implementation("io.ktor:ktor-server-cio:3.3.1")
     implementation("io.ktor:ktor-server-core:3.3.1")
+    implementation("io.ktor:ktor-server-websockets:3.3.1")
     implementation("io.ktor:ktor-client-cio:3.3.1")
     implementation("io.ktor:ktor-client-websockets:3.3.1")
     runtimeOnly("org.slf4j:slf4j-nop:2.0.17")

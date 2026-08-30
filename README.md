@@ -6,8 +6,9 @@ The current implementation status and remaining engineering work are tracked in 
 
 ## Architecture
 
-Desktop clients retain the canonical Platform Home at `https://phone.example.org/` and distinct app
-origins such as `https://messages.phone.example.org/`. OmniAnd-created Android WebViews instead use
+Desktop clients use durable link-derived origins such as
+`https://platform-<publicLinkId>.phone.example.org/` and
+`https://messages-<publicLinkId>.phone.example.org/`. OmniAnd-created Android WebViews instead use
 `http://localhost:8080/` for Home and `http://<app-id>.localhost:8080/` for applications.
 
 Android WebViews reach Ktor over the loopback socket; there is no request interception or native
@@ -17,7 +18,7 @@ same-site, exact-host session cookie derived from a process-lifetime secret. The
 and with that host's credential. Unsafe API methods additionally require the exact matching
 `Origin`. Restarting OmniAnd invalidates old credentials.
 
-Ktor registers pairing, media, contacts, SMS/MMS, application-management, SSE, binary-resource,
+Ktor registers media, contacts, SMS/MMS, application-management, SSE, binary-resource,
 and static-asset routes explicitly. Mutations use ordinary JSON or raw JPEG request bodies. Gallery
 and Messages send a single `multipart/form-data` request per upload; the server streams each file to
 bounded temporary storage, verifies its SHA-256 digest, and removes temporary data on every outcome.
@@ -26,30 +27,27 @@ Gallery accepts files through 500 MiB, while one staged MMS attachment is limite
 For remote desktop access, wildcard DNS points the configured canonical hostname and its subdomains
 at the separately deployed [OmniAndRelay](../omniAndRelay/README.md) edge. An opted-in Android
 foreground service opens one outbound WebSocket tunnel whose multiplexed streams connect to the
-existing loopback HTTP server. The relay is byte-transparent and preserves each request's canonical
-`Host` header for the existing origin and pairing checks.
+existing loopback HTTP server. The relay authorizes a bounded first header block and preserves its
+bytes and `Host` through the byte-transparent tunnel.
 
-An unknown desktop receives a pairing page. Requesting access displays an Android notification, or
-an approval dialog directly when OmniAnd is foregrounded. The phone owner reviews the socket peer
-and browser description and explicitly allows or denies it. Approval installs an HttpOnly, Secure,
-SameSite session cookie for the configured base domain; it authenticates that browser across the
-Platform and app subdomains only until the browser session or OmniAnd process ends. Pairing requests
-expire after two minutes and are rate-limited. Phone-only setup and package-management operations
-remain unavailable to paired desktops.
+The relay-owned `connect.<base>` portal creates a short-lived QR request. Settings launches a native
+CameraX/ML Kit scanner; a first scan atomically enrolls the phone and links the browser, while later
+scans use the encrypted existing device credential. Persistent browser/link records keep one stable
+public link ID across restarts. The portal installs separate Secure, HttpOnly, SameSite=Lax host-only
+sessions through one-minute single-use tickets. Phone-only setup and package-management operations
+remain unavailable to linked desktops.
 
-| Canonical host | Role | Capabilities |
+| Stable host | Role | Capabilities |
 |---|---|---|
-| `phone.example.org` | Shared Platform Home and management APIs | Lists and manages Web apps |
-| `messages.phone.example.org` | Messages | `sms.read`, `sms.send`, `sms.modify` |
-| `test.phone.example.org` | Permission test | None |
+| `platform-<publicLinkId>.phone.example.org` | Platform Home | Lists Web apps |
+| `messages-<publicLinkId>.phone.example.org` | Messages | `sms.read`, `sms.send`, `sms.modify` |
+| `test-<publicLinkId>.phone.example.org` | Permission test | None |
 
 The authenticated Platform Home Web source lives in `../omniAndStore/apps/shell/`. It is the
 embedded React/shadcn Hub Shell, with Apps for all authenticated clients and Android-only Discover
 catalog routes. Shell is not a catalog application: it has no manifest, package, wrapper, registry
 identity, or separate hostname. The Android build produces and embeds its relative-asset bundle.
-The unauthenticated vanilla pairing page lives separately under
-`../omniAndStore/platform/pairing/` and only its required assets are available before approval.
-Messages, Permission Test, and every other installable application appear in Apps only after
+Messages, OmniAnd Test, and every other installable application appear in Apps only after
 catalog installation.
 
 Every catalog Web app is installed as an Android wrapper APK. OmniAnd freshly validates the static
@@ -101,12 +99,13 @@ The relay URL comes from Gradle property `omniandRelayUrl` or environment variab
 `OMNIAND_RELAY_URL`; it defaults to
 `wss://relay.<platform-host>/_omniand/tunnel/v1`. Release builds reject cleartext. Debug builds may
 use `ws://10.0.2.2:18082/_omniand/tunnel/v1` for an emulator. Enable **Background hosting** only
-after installing the build. The foreground service starts the Platform server first, then makes one
-tunnel connection attempt. Disabling the setting closes the tunnel and all relay-created loopback
+after installing the build. The foreground service starts the Platform server first, then reconnects
+with full-jitter exponential backoff and Android network wakeups. Disabling the setting closes the tunnel and all relay-created loopback
 sockets immediately.
 
-The Phase 1 relay accepts one fixed `poc-device` identity but does not authenticate it. Existing
-desktop pairing still gates Platform content, but it does not authenticate the phone to the relay.
+The credential is encrypted with Android Keystore AES-GCM. Tunnel upgrades send it as a bearer token
+plus the persistent device ID; the protocol-v1 HELLO must contain the same ID. Credential rejection
+returns the phone to the unenrolled state and requires another QR bootstrap.
 
 ## Formatting
 
@@ -137,11 +136,12 @@ Verify Shell Discover catalog operations, multipart uploads and cancellation, fi
 connection. Disable Wi-Fi and mobile data and confirm loopback operation continues. Raw, cross-host,
 alternate-port, and non-loopback `.localhost` requests must receive `401`. For desktop testing,
 configure wildcard DNS and trusted TLS termination, enable background hosting, and confirm exactly
-one outbound tunnel connects. Open the configured canonical Home, request access, and approve it on
-the phone. Confirm APIs return `401` before approval; Platform and app subdomains work afterward;
+one outbound tunnel connects. Open `connect.<base>` and scan its QR in phone Settings. Confirm copied
+stable URLs return `401` without their host-only cookie; Platform and app hosts work afterward;
 GET, large POST/upload, multi-megabyte response, at least 20 concurrent requests, and SSE survive the
 tunnel; denial never creates a session; and disabling hosting immediately removes remote access
-without breaking loopback WebViews. Permission Test must still receive `403` from `/api/sms`.
+without breaking loopback WebViews. OmniAnd Test's Permission Isolation checks must still receive
+`403` from `/api/sms`.
 
 For wrapper validation, install an app from Shell's Discover tab, approve Android's package-installer flow, and verify that a launcher entry appears and that its Web files work offline through the canonical origin. Installing a newer catalog package should atomically update the same Android package and retain browser origin data.
 
@@ -150,8 +150,8 @@ For wrapper validation, install an app from Shell's Discover tab, approve Androi
 Authenticated phone-client identity, exact host identity, `PermissionManager`, Android runtime
 permission checks, and server-generated CSP are all required. CSP includes `form-action 'self'`,
 CORS remains denied by default, and third-party WebView cookies are disabled. Desktop traffic
-requires a separately approved, process-lifetime session; Host identity alone never authorizes it.
+requires a relay-issued, host-only signed link session; Host identity alone never authorizes it.
 Generated wrappers are signed, but downloaded Web packages are not yet cryptographically verified.
 There is no embedded LAN TLS; keep port 8080 on a trusted development network only. The external
-Phase 1 relay's fixed identity is identification rather than authentication, and reconnect and
-durable-link work remain deferred.
+Connected-browser management, revocation, and immediate termination of already active revoked
+streams remain deferred.

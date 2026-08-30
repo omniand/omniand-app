@@ -13,7 +13,11 @@ import dev.omniand.hub.background.NotificationSetupActivity
 import dev.omniand.hub.background.PresenceTracker
 import dev.omniand.hub.contacts.ContactsSetupManager
 import dev.omniand.hub.media.MediaSetupManager
+import dev.omniand.hub.pairing.ConnectComputerActivity
+import dev.omniand.hub.pairing.DeviceIdentity
+import dev.omniand.hub.pairing.PairingState
 import dev.omniand.hub.sms.SmsSetupManager
+import dev.omniand.hub.tunnel.TunnelState
 import org.json.JSONObject
 
 /** Builds the stable phone-only Hub settings document and opens allowlisted Android setup flows. */
@@ -36,7 +40,7 @@ object HubSettingsManager {
                 "configuration",
                 JSONObject()
                     .put("version", BuildConfig.VERSION_NAME)
-                    .put("remoteOrigin", "https://${BuildConfig.PLATFORM_HOST}")
+                    .put("remoteOrigin", "https://connect.${BuildConfig.PLATFORM_HOST}")
                     .put("localOrigin", "http://localhost:8080")
                     .put("catalogUrl", BuildConfig.CATALOG_URL),
             )
@@ -64,6 +68,22 @@ object HubSettingsManager {
                     .put("wakeLockActive", PresenceTracker.isWakeLockHeld())
                     .put("connectedDesktopClients", PresenceTracker.connectedClients()),
             )
+            .put(
+                "remoteAccess",
+                JSONObject()
+                    .put("enrolled", DeviceIdentity(context).credential() != null)
+                    .put("deviceId", DeviceIdentity(context).deviceId)
+                    .put("connectionState", TunnelState.state)
+                    .put("scanning", PairingState.scanning)
+                    .put("error", PairingState.error ?: TunnelState.error),
+            )
+    }
+
+    fun connectComputer(context: Context) {
+        context.startActivity(
+            Intent(context, ConnectComputerActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
     }
 
     fun request(context: Context, group: String): Boolean {

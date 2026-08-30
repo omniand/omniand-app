@@ -7,8 +7,13 @@ object DesktopNavigationBar {
     fun platformHref(appId: String, appAuthority: String): String {
         val prefix = "$appId."
         val platformAuthority =
-            appAuthority.takeIf { it.startsWith(prefix, ignoreCase = true) }?.drop(prefix.length)
-                ?: appAuthority
+            when {
+                appAuthority.startsWith(prefix, ignoreCase = true) ->
+                    appAuthority.drop(prefix.length)
+                appAuthority.startsWith("$appId-", ignoreCase = true) ->
+                    "platform-${appAuthority.drop(appId.length + 1)}"
+                else -> appAuthority
+            }
         return "//$platformAuthority/"
     }
 

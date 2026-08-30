@@ -25,7 +25,7 @@ class TunnelProtocolTest {
         }
         assertEquals(
             "4f4d4e49414e4400010a706f632d646576696365",
-            TunnelProtocol.hello().hex(),
+            TunnelProtocol.hello("poc-device").hex(),
         )
     }
 
@@ -64,11 +64,11 @@ class TunnelProtocolTest {
         val expected =
             byteArrayOf(0x4f, 0x4d, 0x4e, 0x49, 0x41, 0x4e, 0x44, 0, 1, 10) +
                 "poc-device".toByteArray()
-        assertArrayEquals(expected, TunnelProtocol.hello())
-        TunnelProtocol.validateHello(expected)
+        assertArrayEquals(expected, TunnelProtocol.hello("poc-device"))
+        TunnelProtocol.validateHello(expected, "poc-device")
         val unsupported = expected.copyOf().also { it[8] = 2 }
         assertThrows(IllegalArgumentException::class.java) {
-            TunnelProtocol.validateHello(unsupported)
+            TunnelProtocol.validateHello(unsupported, "poc-device")
         }
     }
 

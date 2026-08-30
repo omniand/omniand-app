@@ -76,7 +76,6 @@ class MainActivity : Activity() {
         activeInstance = this
         WebAppRegistry.invalidate()
         openPendingSetup()
-        DesktopPairingNotifications.showPending(this)
         if (::webView.isInitialized) {
             webView.post {
                 webView.evaluateJavascript(

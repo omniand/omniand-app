@@ -10,6 +10,8 @@ import io.ktor.http.content.PartData
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.call
+import io.ktor.server.application.createRouteScopedPlugin
+import io.ktor.server.application.install
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.request.httpMethod
@@ -25,12 +27,22 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
+import io.ktor.server.websocket.WebSockets
+import io.ktor.server.websocket.webSocket
 import io.ktor.util.cio.toByteArray
 import io.ktor.utils.io.readAvailable
+import io.ktor.websocket.CloseReason
+import io.ktor.websocket.Frame
+import io.ktor.websocket.close
+import io.ktor.websocket.readText
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 /** Runs the CIO transport with explicit route registration for every Platform API family. */
@@ -43,17 +55,112 @@ object KtorServer {
     }
 
     /** Registers API methods first and reserves the final wildcard for non-API assets. */
-    internal fun Application.platformModule(context: Context) {
+    internal fun Application.platformModule(
+        context: Context,
+        websocketAccess: suspend ApplicationCall.() -> WebSocketAccess = {
+            authorizeTestWebSocket(context)
+        },
+        websocketTickPeriod: Duration = 10.seconds,
+    ) {
+        install(WebSockets) {
+            pingPeriodMillis = 15.seconds.inWholeMilliseconds
+            timeoutMillis = 10.seconds.inWholeMilliseconds
+            maxFrameSize = TEST_WEBSOCKET_MAX_FRAME_SIZE
+            masking = false
+        }
         routing {
-            pairingRoutes(context)
             mediaRoutes(context)
             contactsRoutes(context)
             filesRoutes(context)
             smsRoutes(context)
             applicationRoutes(context)
             hubRoutes(context)
+            testRoutes(websocketAccess, websocketTickPeriod)
             route("/{remaining...}") { get { call.staticOrNotFound(context) } }
         }
+    }
+
+    /** Keeps the permanent diagnostic socket isolated to the authenticated OmniAnd Test origin. */
+    private fun Route.testRoutes(
+        access: suspend ApplicationCall.() -> WebSocketAccess,
+        tickPeriod: Duration,
+    ) {
+        route("/api/test/websocket") {
+            install(TestWebSocketAuthorization) {
+                authorize = access
+            }
+            webSocket { runTestWebSocket(tickPeriod) }
+        }
+    }
+
+    /** Emits server traffic independently while accepting only bounded JSON text probes. */
+    private suspend fun io.ktor.server.websocket.DefaultWebSocketServerSession.runTestWebSocket(
+        tickPeriod: Duration
+    ) {
+        send(Frame.Text(JSONObject().put("type", "ready").toString()))
+        val ticker = launch {
+            var sequence = 0L
+            while (true) {
+                delay(tickPeriod)
+                send(
+                    Frame.Text(
+                        JSONObject().put("type", "tick").put("sequence", ++sequence).toString()
+                    )
+                )
+            }
+        }
+        try {
+            for (frame in incoming) {
+                if (frame !is Frame.Text) {
+                    close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "Text probes required"))
+                    break
+                }
+                val text = frame.readText()
+                val probe = runCatching { JSONObject(text) }.getOrNull()
+                if (
+                    probe == null ||
+                        probe.optString("type") != "probe" ||
+                        !probe.has("id") ||
+                        probe.opt("id") !is String ||
+                        probe.optString("id").isBlank() ||
+                        probe.optString("id").length > TEST_WEBSOCKET_MAX_PROBE_ID ||
+                        probe.length() != 2
+                ) {
+                    close(CloseReason(CloseReason.Codes.NOT_CONSISTENT, "Invalid probe"))
+                    break
+                }
+                send(Frame.Text(text))
+            }
+        } finally {
+            ticker.cancel()
+        }
+    }
+
+    private fun ApplicationCall.authorizeTestWebSocket(context: Context): WebSocketAccess {
+        val requestContext =
+            PlatformServer.authenticateRequest(
+                context,
+                request.headers["Host"].orEmpty(),
+                request.local.remoteAddress,
+                "GET",
+                "/api/test/websocket",
+                request.platformHeaders(),
+            )
+        return authorizeTestWebSocket(requestContext, request.headers["Origin"])
+    }
+
+    internal fun authorizeTestWebSocket(
+        request: PlatformRequestContext?,
+        origin: String?,
+    ): WebSocketAccess {
+        if (request == null) return WebSocketAccess.UNAUTHORIZED
+        if (request.app?.id != TEST_APP_ID) return WebSocketAccess.FORBIDDEN
+        val expectedOrigin =
+            when (request.transport) {
+                PlatformRequestContext.Transport.LOOPBACK_HTTP -> "http://${request.authority}"
+                PlatformRequestContext.Transport.DESKTOP_HTTP -> "https://${request.hostname}"
+            }
+        return if (origin == expectedOrigin) WebSocketAccess.ALLOWED else WebSocketAccess.FORBIDDEN
     }
 
     private suspend fun ApplicationCall.staticOrNotFound(context: Context) {
@@ -62,13 +169,6 @@ object KtorServer {
             return
         }
         forward(context)
-    }
-
-    private fun Route.pairingRoutes(context: Context) {
-        route("/api/pairing") {
-            post("/request") { call.forward(context) }
-            get("/status") { call.forward(context) }
-        }
     }
 
     private fun Route.mediaRoutes(context: Context) {
@@ -162,6 +262,7 @@ object KtorServer {
         route("/api/hub") {
             get("/settings") { call.forward(context) }
             put("/settings/background-hosting") { call.forward(context) }
+            post("/connect-computer") { call.forward(context) }
             post("/permissions/{group}/request") { call.forward(context) }
             get("/presence") { call.forward(context) }
         }
@@ -171,7 +272,7 @@ object KtorServer {
     private suspend fun ApplicationCall.forward(context: Context) {
         val headers = request.platformHeaders()
         val requestPath = request.uri.substringBefore('?')
-        if (requestPath.startsWith("/api/") && !requestPath.startsWith("/api/pairing/")) {
+        if (requestPath.startsWith("/api/")) {
             val authenticated =
                 PlatformServer.authenticateRequest(
                     context,
@@ -412,4 +513,34 @@ object KtorServer {
     private class UploadTooLarge : Exception()
 
     private class InvalidMultipart : Exception()
+
+    internal enum class WebSocketAccess {
+        ALLOWED,
+        UNAUTHORIZED,
+        FORBIDDEN,
+    }
+
+    private class TestWebSocketAuthorizationConfig {
+        lateinit var authorize: suspend ApplicationCall.() -> WebSocketAccess
+    }
+
+    private val TestWebSocketAuthorization =
+        createRouteScopedPlugin(
+            "TestWebSocketAuthorization",
+            ::TestWebSocketAuthorizationConfig,
+        ) {
+            val authorize = pluginConfig.authorize
+            onCall { call ->
+                when (call.authorize()) {
+                    WebSocketAccess.ALLOWED -> Unit
+                    WebSocketAccess.UNAUTHORIZED ->
+                        call.respondJson(401, "authentication-required", "Unauthorized")
+                    WebSocketAccess.FORBIDDEN -> call.respondJson(403, "forbidden", "Forbidden")
+                }
+            }
+        }
+
+    private const val TEST_APP_ID = "test"
+    private const val TEST_WEBSOCKET_MAX_PROBE_ID = 200
+    private const val TEST_WEBSOCKET_MAX_FRAME_SIZE = 4L * 1024
 }

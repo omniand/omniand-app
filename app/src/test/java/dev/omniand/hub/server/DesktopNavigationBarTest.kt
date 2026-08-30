@@ -1,6 +1,7 @@
 package dev.omniand.hub.server
 
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -14,6 +15,13 @@ class DesktopNavigationBarTest {
         assertTrue(
             DesktopNavigationBar.platformHref("messages", "messages.phone.example.org") ==
                 "//phone.example.org/"
+        )
+        assertEquals(
+            "//platform-abcdefghijklmnopqrstuvwxyz.phone.example.org/",
+            DesktopNavigationBar.platformHref(
+                "messages",
+                "messages-abcdefghijklmnopqrstuvwxyz.phone.example.org",
+            ),
         )
     }
 
