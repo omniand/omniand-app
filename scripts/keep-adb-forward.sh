@@ -5,7 +5,7 @@ set -o pipefail
 
 readonly ADB_BIN="${ADB_BIN:-adb}"
 readonly DEVICE_SERIAL="${ANDROID_SERIAL:-emulator-5554}"
-readonly HOST_PORT="${OMNIAND_HOST_PORT:-8080}"
+readonly HOST_PORT="${OMNIAND_HOST_PORT:-18080}"
 readonly DEVICE_PORT="${OMNIAND_DEVICE_PORT:-8080}"
 
 echo "Keeping OmniAnd desktop access active for $DEVICE_SERIAL."
