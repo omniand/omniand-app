@@ -1,9 +1,11 @@
 package dev.omniand.hub.server
 
 import android.content.Context
+import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
+import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -35,6 +37,7 @@ class KtorRoutingTest {
                 "/api/apps/catalog/messages/icon",
                 "/api/hub/settings",
                 "/api/hub/presence",
+                "/api/hub/remote-links",
             )
             .forEach { path ->
                 val response = client.get(path) { header(HttpHeaders.Host, "localhost:8080") }
@@ -45,6 +48,24 @@ class KtorRoutingTest {
             HttpStatusCode.Unauthorized,
             client
                 .post("/api/hub/permissions/sms/request") {
+                    header(HttpHeaders.Host, "localhost:8080")
+                }
+                .status,
+        )
+        assertEquals(
+            HttpStatusCode.Unauthorized,
+            client
+                .put("/api/hub/remote-links/abcdefghijklmnopqrstuvwxyz") {
+                    header(HttpHeaders.Host, "localhost:8080")
+                    header(HttpHeaders.ContentType, "application/json")
+                    setBody("malformed")
+                }
+                .status,
+        )
+        assertEquals(
+            HttpStatusCode.Unauthorized,
+            client
+                .delete("/api/hub/remote-links/abcdefghijklmnopqrstuvwxyz") {
                     header(HttpHeaders.Host, "localhost:8080")
                 }
                 .status,

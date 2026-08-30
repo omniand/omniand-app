@@ -263,6 +263,9 @@ object KtorServer {
             get("/settings") { call.forward(context) }
             put("/settings/background-hosting") { call.forward(context) }
             post("/connect-computer") { call.forward(context) }
+            get("/remote-links") { call.forward(context) }
+            put("/remote-links/{id}") { call.forward(context) }
+            delete("/remote-links/{id}") { call.forward(context) }
             post("/permissions/{group}/request") { call.forward(context) }
             get("/presence") { call.forward(context) }
         }

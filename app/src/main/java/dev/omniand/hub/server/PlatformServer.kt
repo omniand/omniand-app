@@ -16,6 +16,8 @@ import dev.omniand.hub.media.MediaEventBroadcaster
 import dev.omniand.hub.media.MediaSetupManager
 import dev.omniand.hub.pairing.DeviceIdentity
 import dev.omniand.hub.pairing.RemoteLinkSession
+import dev.omniand.hub.pairing.RemoteLinksClient
+import dev.omniand.hub.pairing.RemoteLinksFailure
 import dev.omniand.hub.permissions.PermissionManager
 import dev.omniand.hub.services.ContactsService
 import dev.omniand.hub.services.FilesService
@@ -246,6 +248,28 @@ object PlatformServer {
                 return codedError(403, "phone-local-required", "Computer pairing is phone-local")
             HubSettingsManager.connectComputer(context)
             return json(200, JSONObject().put("opened", true))
+        }
+        val remoteLink = Regex("^/api/hub/remote-links/([a-z2-7]{26})$").matchEntire(path)
+        if (path == "/api/hub/remote-links" && method == "GET") {
+            if (!isLocalPlatformHome)
+                return codedError(403, "phone-local-required", "Remote links are phone-local")
+            return remoteLinksResponse { RemoteLinksClient(context).list() }
+        }
+        if (remoteLink != null && method in setOf("PUT", "DELETE")) {
+            if (!isLocalPlatformHome)
+                return codedError(403, "phone-local-required", "Remote links are phone-local")
+            val id = remoteLink.groupValues[1]
+            return if (method == "PUT") {
+                val name =
+                    requireJson(headers, body).let {
+                        if (it.isNull("name")) null else it.getString("name")
+                    }
+                remoteLinksResponse { RemoteLinksClient(context).rename(id, name) }
+            } else
+                remoteLinksResponse {
+                    RemoteLinksClient(context).revoke(id)
+                    JSONObject().put("revoked", true)
+                }
         }
         if (path == "/api/hub/presence" && method == "GET") {
             if (!canReadDesktopPresence(request))
@@ -1553,6 +1577,17 @@ object PlatformServer {
             )
         } else {
             bytes
+        }
+
+    private fun remoteLinksResponse(block: () -> Any): PlatformContent =
+        try {
+            json(200, block())
+        } catch (error: RemoteLinksFailure) {
+            codedError(
+                if (error.code == "relay-unenrolled") 409 else 502,
+                error.code,
+                error.message ?: "Relay request failed",
+            )
         }
 
     private fun json(code: Int, value: Any) =

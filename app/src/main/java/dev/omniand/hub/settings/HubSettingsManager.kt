@@ -68,8 +68,7 @@ object HubSettingsManager {
                     .put("enabled", BackgroundHostingManager.isEnabled(context))
                     .put("serviceRunning", BackgroundHostingManager.isServiceRunning())
                     .put("batteryExempt", BackgroundHostingManager.isBatteryExempt(context))
-                    .put("wakeLockActive", PresenceTracker.isWakeLockHeld())
-                    .put("connectedDesktopClients", PresenceTracker.connectedClients()),
+                    .put("wakeLockActive", PresenceTracker.isWakeLockHeld()),
             )
             .put(
                 "remoteAccess",
