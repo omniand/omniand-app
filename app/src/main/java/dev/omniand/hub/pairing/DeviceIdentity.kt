@@ -48,8 +48,33 @@ class DeviceIdentity(private val context: Context) {
             .commit()
     }
 
+    /** Stores the credential and the public endpoints advertised by the scanned relay instance. */
+    fun storeEnrollment(value: String, connectOrigin: String, relayUrl: String, baseHost: String) {
+        require(connectOrigin.startsWith("https://")) { "invalid connect origin" }
+        require(baseHost.isNotBlank()) { "invalid platform host" }
+        storeCredential(value)
+        preferences
+            .edit()
+            .putString(CONNECT_ORIGIN, connectOrigin)
+            .putString(RELAY_URL, relayUrl)
+            .putString(BASE_HOST, baseHost.lowercase())
+            .commit()
+    }
+
+    fun connectOrigin(): String? = preferences.getString(CONNECT_ORIGIN, null)
+
+    fun relayUrl(): String? = preferences.getString(RELAY_URL, null)
+
+    fun baseHost(): String? = preferences.getString(BASE_HOST, null)
+
     fun clearCredential() {
-        preferences.edit().remove(CREDENTIAL).commit()
+        preferences
+            .edit()
+            .remove(CREDENTIAL)
+            .remove(CONNECT_ORIGIN)
+            .remove(RELAY_URL)
+            .remove(BASE_HOST)
+            .commit()
         runCatching { keyStore().deleteEntry(KEY_ALIAS) }
     }
 
@@ -83,6 +108,9 @@ class DeviceIdentity(private val context: Context) {
         const val PREFERENCES = "relay-identity"
         const val DEVICE_ID = "device-id"
         const val CREDENTIAL = "credential"
+        const val CONNECT_ORIGIN = "connect-origin"
+        const val RELAY_URL = "relay-url"
+        const val BASE_HOST = "base-host"
         const val KEY_ALIAS = "omniand-relay-credential-v1"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val IV_LENGTH = 12

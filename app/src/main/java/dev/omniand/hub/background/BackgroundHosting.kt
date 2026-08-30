@@ -19,6 +19,7 @@ import android.provider.Settings
 import androidx.core.content.ContextCompat
 import dev.omniand.hub.MainActivity
 import dev.omniand.hub.R
+import dev.omniand.hub.pairing.DeviceIdentity
 import dev.omniand.hub.server.PlatformServer
 import dev.omniand.hub.tunnel.RelayTunnelClient
 import java.io.InputStream
@@ -247,7 +248,8 @@ class BackgroundHostingService : Service() {
                 RelayTunnelClient(
                         applicationContext,
                         tunnelScope,
-                        dev.omniand.hub.BuildConfig.RELAY_URL,
+                        DeviceIdentity(applicationContext).relayUrl()
+                            ?: dev.omniand.hub.BuildConfig.RELAY_URL,
                     )
                     .also {
                         it.start()
@@ -272,7 +274,8 @@ class BackgroundHostingService : Service() {
                 RelayTunnelClient(
                         applicationContext,
                         tunnelScope,
-                        dev.omniand.hub.BuildConfig.RELAY_URL,
+                        DeviceIdentity(applicationContext).relayUrl()
+                            ?: dev.omniand.hub.BuildConfig.RELAY_URL,
                     )
                     .also { it.start() }
         }

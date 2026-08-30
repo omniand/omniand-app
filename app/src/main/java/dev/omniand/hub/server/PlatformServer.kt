@@ -14,6 +14,7 @@ import dev.omniand.hub.files.FilesSetupManager
 import dev.omniand.hub.media.MediaDeleteActivity
 import dev.omniand.hub.media.MediaEventBroadcaster
 import dev.omniand.hub.media.MediaSetupManager
+import dev.omniand.hub.pairing.DeviceIdentity
 import dev.omniand.hub.pairing.RemoteLinkSession
 import dev.omniand.hub.permissions.PermissionManager
 import dev.omniand.hub.services.ContactsService
@@ -123,8 +124,8 @@ object PlatformServer {
         val port = parsed.second
         val localhost = hostname == "localhost" || hostname.endsWith(".localhost")
         if (!localhost) {
-            val stableHost =
-                RemoteLinkSession.parseHost(hostname, BuildConfig.PLATFORM_HOST) ?: return null
+            val baseHost = DeviceIdentity(context).baseHost() ?: BuildConfig.PLATFORM_HOST
+            val stableHost = RemoteLinkSession.parseHost(hostname, baseHost) ?: return null
             val app =
                 if (stableHost.appId == "platform") null
                 else
@@ -736,6 +737,9 @@ object PlatformServer {
         }
         if (WebAppRegistry.isPlatformHost(context, host)) {
             if (path == "/api/apps/web" && method == "GET") {
+                val identity = DeviceIdentity(context)
+                val baseHost = identity.baseHost() ?: BuildConfig.PLATFORM_HOST
+                val connectOrigin = identity.connectOrigin() ?: "https://connect.$baseHost"
                 val apps =
                     JSONArray().apply {
                         WebAppRegistry.apps(context).forEach { item ->
@@ -755,10 +759,10 @@ object PlatformServer {
                                                 WebAppRegistry.localhostOriginFor(item)
                                             RemoteLinkSession.parseHost(
                                                 host,
-                                                BuildConfig.PLATFORM_HOST,
+                                                baseHost,
                                             ) != null ->
-                                                "https://connect.${BuildConfig.PLATFORM_HOST}/open/${
-                                                    checkNotNull(RemoteLinkSession.parseHost(host, BuildConfig.PLATFORM_HOST)).publicLinkId
+                                                "$connectOrigin/open/${
+                                                    checkNotNull(RemoteLinkSession.parseHost(host, baseHost)).publicLinkId
                                                 }/${item.id}"
                                             else ->
                                                 WebAppRegistry.developmentOriginFor(

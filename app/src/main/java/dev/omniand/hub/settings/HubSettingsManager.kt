@@ -35,12 +35,15 @@ object HubSettingsManager {
     fun state(context: Context): JSONObject {
         val notifications =
             Build.VERSION.SDK_INT < 33 || granted(context, Manifest.permission.POST_NOTIFICATIONS)
+        val identity = DeviceIdentity(context)
+        val connectOrigin =
+            identity.connectOrigin() ?: "https://connect.${BuildConfig.PLATFORM_HOST}"
         return JSONObject()
             .put(
                 "configuration",
                 JSONObject()
                     .put("version", BuildConfig.VERSION_NAME)
-                    .put("remoteOrigin", "https://connect.${BuildConfig.PLATFORM_HOST}")
+                    .put("remoteOrigin", connectOrigin)
                     .put("localOrigin", "http://localhost:8080")
                     .put("catalogUrl", BuildConfig.CATALOG_URL),
             )
@@ -71,8 +74,8 @@ object HubSettingsManager {
             .put(
                 "remoteAccess",
                 JSONObject()
-                    .put("enrolled", DeviceIdentity(context).credential() != null)
-                    .put("deviceId", DeviceIdentity(context).deviceId)
+                    .put("enrolled", identity.credential() != null)
+                    .put("deviceId", identity.deviceId)
                     .put("connectionState", TunnelState.state)
                     .put("scanning", PairingState.scanning)
                     .put("error", PairingState.error ?: TunnelState.error),

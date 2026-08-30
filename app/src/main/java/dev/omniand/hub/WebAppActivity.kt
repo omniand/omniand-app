@@ -9,6 +9,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import dev.omniand.hub.pairing.DeviceIdentity
 import dev.omniand.hub.sms.SmsNotifications
 import dev.omniand.hub.webapps.WebAppRegistry
 import dev.omniand.hub.webapps.displayName
@@ -79,7 +80,8 @@ class WebAppActivity : Activity() {
                             }
                             if (
                                 uri.scheme == "https" &&
-                                    uri.host == "messages.${BuildConfig.PLATFORM_HOST}"
+                                    uri.host ==
+                                        "messages.${DeviceIdentity(applicationContext).baseHost() ?: BuildConfig.PLATFORM_HOST}"
                             ) {
                                 val route = uri.fragment?.let { "#$it" }.orEmpty()
                                 if (validRoute(route))

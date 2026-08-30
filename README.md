@@ -75,10 +75,12 @@ the result to the newest 100 records.
 
 Requirements are JDK 17 or 21 and Android SDK 35.
 
-The canonical desktop domain defaults to `phone.example.org`. Configure it at build time with
-either `-PomniandPlatformHost=phone.your-domain.example` or the
-`OMNIAND_PLATFORM_HOST=phone.your-domain.example` environment variable. The value must be a DNS
-hostname with at least two labels; configure the same base and wildcard names in DNS and TLS.
+The canonical desktop domain defaults to `phone.example.org` only before enrollment and for legacy
+development routes. A scanned HTTPS QR supplies the connect origin; the relay response supplies the
+base host and authenticated tunnel URL. OmniAnd validates and persists that configuration, allowing
+the same APK to enroll against independently hosted domains. The Gradle
+`omniandPlatformHost`/`OMNIAND_PLATFORM_HOST` and `omniandRelayUrl`/`OMNIAND_RELAY_URL` settings
+remain useful as pre-enrollment and debug fallbacks.
 
 ```sh
 ./gradlew assembleDebug
@@ -92,10 +94,10 @@ The development catalog URL is configured with `CATALOG_URL` in `app/build.gradl
 ## Relay integration
 
 The Rust service, Caddy/Compose deployment, protocol documentation, and server tests live in the
-sibling [`../omniAndRelay`](../omniAndRelay/README.md) repository. Export its
-`OMNIAND_PLATFORM_HOST` and `OMNIAND_RELAY_URL` values before building this Android client.
+sibling [`../omniAndRelay`](../omniAndRelay/README.md) repository. Production enrollment discovers
+the selected instance from its QR and response rather than requiring those values at build time.
 
-The relay URL comes from Gradle property `omniandRelayUrl` or environment variable
+Before enrollment, the fallback relay URL comes from Gradle property `omniandRelayUrl` or environment variable
 `OMNIAND_RELAY_URL`; it defaults to
 `wss://relay.<platform-host>/_omniand/tunnel/v1`. Release builds reject cleartext. Debug builds may
 use `ws://10.0.2.2:18082/_omniand/tunnel/v1` for an emulator. Enable **Background hosting** only
@@ -104,7 +106,8 @@ with full-jitter exponential backoff and Android network wakeups. Disabling the 
 sockets immediately.
 
 The credential is encrypted with Android Keystore AES-GCM. Tunnel upgrades send it as a bearer token
-plus the persistent device ID; the protocol-v1 HELLO must contain the same ID. Credential rejection
+plus the persistent device ID; the protocol-v1 HELLO must contain the same ID. Scanning a different
+relay origin bootstraps that instance and replaces the active enrollment. Credential rejection
 returns the phone to the unenrolled state and requires another QR bootstrap.
 
 ## Formatting

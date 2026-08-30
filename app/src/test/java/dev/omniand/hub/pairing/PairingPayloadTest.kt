@@ -8,21 +8,21 @@ class PairingPayloadTest {
     private val secret = "ab".repeat(32)
 
     @Test
-    fun acceptsOnlyExactTrustedHttpsPayload() {
+    fun acceptsAnyExactHttpsPairingDestination() {
         assertEquals(
-            secret,
-            PairingPayload.secret(
-                "https://connect.phone.example.org/pair/$secret",
-                "phone.example.org",
-            ),
+            PairingTarget("https://connect.instance-one.example", secret),
+            PairingTarget.parse("https://connect.instance-one.example/pair/$secret"),
+        )
+        assertEquals(
+            PairingTarget("https://pairing.other-domain.fr", secret),
+            PairingTarget.parse("https://pairing.other-domain.fr/pair/$secret"),
         )
         for (invalid in
             listOf(
                 "http://connect.phone.example.org/pair/$secret",
-                "https://evil.example/pair/$secret",
                 "https://connect.phone.example.org:8443/pair/$secret",
                 "https://connect.phone.example.org/pair/$secret?next=evil",
                 "https://connect.phone.example.org/pair/${"z".repeat(64)}",
-            )) assertNull(PairingPayload.secret(invalid, "phone.example.org"))
+            )) assertNull(PairingTarget.parse(invalid))
     }
 }
