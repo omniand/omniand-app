@@ -4,10 +4,11 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import dev.omniand.hub.BuildConfig
+import dev.omniand.hub.network.OmniAndDns
 import dev.omniand.hub.pairing.DeviceIdentity
 import dev.omniand.hub.server.PlatformServer
 import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
+import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.client.request.header
@@ -40,7 +41,11 @@ class RelayTunnelClient(
 ) {
     private val streams = ConcurrentHashMap<Long, LocalStream>()
     private val stopped = AtomicBoolean(false)
-    private val client = HttpClient(CIO) { install(WebSockets) }
+    private val client =
+        HttpClient(OkHttp) {
+            engine { config { dns(OmniAndDns) } }
+            install(WebSockets)
+        }
     private val networkAvailable = Channel<Unit>(Channel.CONFLATED)
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
     private val networkCallback =

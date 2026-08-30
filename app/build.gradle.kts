@@ -34,6 +34,52 @@ val relayUrl =
         .orElse(providers.environmentVariable("OMNIAND_RELAY_URL"))
         .orElse("wss://relay.$platformHost/_omniand/tunnel/v1")
         .get()
+val debugCaCertificate =
+    providers
+        .gradleProperty("omniandDebugCaCert")
+        .orElse(providers.environmentVariable("OMNIAND_DEBUG_CA_CERT"))
+val debugNetworkSecurityResources =
+    layout.buildDirectory.dir("generated/debugNetworkSecurityResources")
+val generateDebugNetworkSecurityResources by tasks.registering {
+    val certificatePath = debugCaCertificate.orNull.orEmpty()
+    inputs.property("certificatePath", certificatePath)
+    if (certificatePath.isNotEmpty()) inputs.file(certificatePath)
+    outputs.dir(debugNetworkSecurityResources)
+    doLast {
+        val resourceRoot = debugNetworkSecurityResources.get().asFile
+        val xmlDirectory = resourceRoot.resolve("xml").apply { mkdirs() }
+        val rawDirectory = resourceRoot.resolve("raw").apply { mkdirs() }
+        val certificateOutput = rawDirectory.resolve("omniand_debug_ca.pem")
+        val certificate = certificatePath.takeIf(String::isNotEmpty)?.let(::file)
+        if (certificate != null) {
+            check(certificate.isFile) { "OMNIAND_DEBUG_CA_CERT does not point to a file" }
+            certificate.copyTo(certificateOutput, overwrite = true)
+        } else {
+            certificateOutput.delete()
+        }
+        val anchors =
+            if (certificate != null) {
+                "<certificates src=\"@raw/omniand_debug_ca\" />"
+            } else {
+                "<certificates src=\"system\" />"
+            }
+        xmlDirectory
+            .resolve("debug_network_security_config.xml")
+            .writeText(
+                """<?xml version="1.0" encoding="utf-8"?>
+                <network-security-config>
+                    <base-config cleartextTrafficPermitted="true">
+                        <trust-anchors><certificates src="system" /></trust-anchors>
+                    </base-config>
+                    <debug-overrides>
+                        <trust-anchors>$anchors</trust-anchors>
+                    </debug-overrides>
+                </network-security-config>
+                """
+                    .trimIndent()
+            )
+    }
+}
 
 check(
     platformHost.length <= 253 &&
@@ -118,9 +164,16 @@ android {
             layout.buildDirectory.dir("generated/wrapperAssets"),
             layout.buildDirectory.dir("generated/embeddedWebAssets"),
         )
+    sourceSets.getByName("debug").res.srcDir(debugNetworkSecurityResources)
 }
 
 tasks.named("preBuild").configure { dependsOn(bundleWrapperTemplate, syncEmbeddedWeb) }
+
+tasks
+    .matching { it.name == "preDebugBuild" }
+    .configureEach {
+        dependsOn(generateDebugNetworkSecurityResources)
+    }
 
 dependencies {
     implementation("androidx.core:core:1.15.0")
@@ -135,6 +188,7 @@ dependencies {
     implementation("io.ktor:ktor-server-core:3.3.1")
     implementation("io.ktor:ktor-server-websockets:3.3.1")
     implementation("io.ktor:ktor-client-cio:3.3.1")
+    implementation("io.ktor:ktor-client-okhttp:3.3.1")
     implementation("io.ktor:ktor-client-websockets:3.3.1")
     runtimeOnly("org.slf4j:slf4j-nop:2.0.17")
     testImplementation("junit:junit:4.13.2")

@@ -1,0 +1,6 @@
+<resources>
+    <string name="pairing_scanner_instruction">Placez le QR code entier dans le cadre</string>
+    <string name="pairing_scanner_invalid">Ce QR code n’est pas un lien de connexion OmniAnd valide</string>
+    <string name="pairing_scanner_connecting">Connexion…</string>
+    <string name="pairing_scanner_failure">Impossible de se connecter</string>
+</resources>

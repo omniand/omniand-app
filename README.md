@@ -105,6 +105,12 @@ after installing the build. The foreground service starts the Platform server fi
 with full-jitter exponential backoff and Android network wakeups. Disabling the setting closes the tunnel and all relay-created loopback
 sockets immediately.
 
+Debug emulator builds reroute non-`localhost` DNS names that resolve exclusively to loopback through
+the emulator host at `10.0.2.2`, while retaining the original hostname for TLS verification. For a
+local Caddy certificate signed by `mkcert`, set `OMNIAND_DEBUG_CA_CERT` to its public root CA PEM.
+Gradle embeds that CA only in the generated debug resources; release builds never include it and no
+certificate needs to be installed into Android's system or user trust store.
+
 The credential is encrypted with Android Keystore AES-GCM. Tunnel upgrades send it as a bearer token
 plus the persistent device ID; the protocol-v1 HELLO must contain the same ID. Scanning a different
 relay origin bootstraps that instance and replaces the active enrollment. Credential rejection
