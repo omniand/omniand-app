@@ -1,7 +1,10 @@
 package dev.omniand.hub.camera
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
+import dev.omniand.hub.BuildConfig
+import dev.omniand.hub.pairing.DeviceIdentity
 import org.json.JSONObject
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
@@ -13,6 +16,7 @@ import org.webrtc.DefaultVideoEncoderFactory
 import org.webrtc.EglBase
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
+import org.webrtc.MediaStreamTrack
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.RtpTransceiver
@@ -23,7 +27,11 @@ import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 
 /** Owns native WebRTC capture resources for exactly one foreground-approved viewing session. */
-class CameraWebRtcPeer(private val context: Context, private val manager: CameraSessionManager) {
+class CameraWebRtcPeer(
+    private val context: Context,
+    private val manager: CameraSessionManager,
+    credentials: TurnCredentials,
+) {
     private val factory: PeerConnectionFactory
     private val eglBase: EglBase
     private val videoSource: VideoSource
@@ -77,34 +85,35 @@ class CameraWebRtcPeer(private val context: Context, private val manager: Camera
 
                     override fun onCameraOpening(cameraName: String) = Unit
 
-                    override fun onFirstFrameAvailable() = Unit
+                    override fun onFirstFrameAvailable() {
+                        Log.i(TAG, "first camera frame delivered to WebRTC")
+                    }
 
                     override fun onCameraClosed() = Unit
                 },
             )
         helper = SurfaceTextureHelper.create("OmniAndCamera", eglBase.eglBaseContext)
         val servers =
-            listOf(
-                PeerConnection.IceServer.builder(
-                        "stun:turn.${dev.omniand.hub.pairing.DeviceIdentity(context).baseHost() ?: dev.omniand.hub.BuildConfig.PLATFORM_HOST}:3478"
-                    )
+            androidTurnUrls(credentials.urls).map { url ->
+                PeerConnection.IceServer.builder(url)
+                    .setUsername(credentials.androidUsername)
+                    .setPassword(credentials.androidCredential)
                     .createIceServer()
-            )
+            }
+        Log.i(TAG, "configured ${servers.size} ICE server URL(s); emulator=${isEmulator()}")
+        val rtcConfiguration = PeerConnection.RTCConfiguration(servers)
+        // The emulator's 10.0.2.x candidates are private to its virtual NAT,
+        // so they cannot be reached by a desktop browser. Force its side onto
+        // a TURN allocation; physical devices retain direct ICE first.
+        if (isEmulator())
+            rtcConfiguration.iceTransportsType = PeerConnection.IceTransportsType.RELAY
         connection =
-            factory.createPeerConnection(PeerConnection.RTCConfiguration(servers), observer())
+            factory.createPeerConnection(rtcConfiguration, observer())
                 ?: error("PeerConnection unavailable")
         videoTrack = factory.createVideoTrack("camera-video", videoSource)
         audioTrack = factory.createAudioTrack("camera-audio", audioSource)
-        val sendOnly =
-            RtpTransceiver.RtpTransceiverInit(
-                RtpTransceiver.RtpTransceiverDirection.SEND_ONLY,
-                listOf("omniand"),
-            )
-        // addTrack creates a send/receive transceiver. Firefox then advertises an incoming
-        // stream even for a receiver-only browser offer, which trips a native WebRTC assertion.
-        // This peer never receives media, so declare that boundary explicitly.
-        connection.addTransceiver(videoTrack, sendOnly)
-        connection.addTransceiver(audioTrack, sendOnly)
+        videoTrack.setEnabled(true)
+        audioTrack.setEnabled(true)
         connection.setAudioPlayout(false)
         // Initializing does not open the camera. Wait for the browser's offer before delivering
         // a frame, so the sender is negotiated before native video processing begins.
@@ -126,6 +135,7 @@ class CameraWebRtcPeer(private val context: Context, private val manager: Camera
                             pendingCandidates.toList().also { pendingCandidates.clear() }
                         }
                     queued.forEach(connection::addIceCandidate)
+                    configureSenders()
                     createAnswer()
                 }
 
@@ -191,6 +201,7 @@ class CameraWebRtcPeer(private val context: Context, private val manager: Camera
     fun candidate(value: JSONObject) {
         val candidate = value.optString("candidate")
         if (candidate.length in 1..MAX_CANDIDATE) {
+            Log.i(TAG, "browser ICE candidate: ${candidateSummary(candidate)}")
             val nativeCandidate =
                 IceCandidate(
                     value.optString("sdpMid"),
@@ -241,6 +252,7 @@ class CameraWebRtcPeer(private val context: Context, private val manager: Camera
     private fun observer() =
         object : PeerConnection.Observer {
             override fun onIceCandidate(candidate: IceCandidate) {
+                Log.i(TAG, "local ICE candidate: ${candidateSummary(candidate.sdp)}")
                 manager.emit(
                     JSONObject()
                         .put("version", 1)
@@ -258,7 +270,12 @@ class CameraWebRtcPeer(private val context: Context, private val manager: Camera
             override fun onIceCandidatesRemoved(candidates: Array<IceCandidate>) = Unit
 
             override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
+                Log.i(TAG, "ICE connection: $state")
                 if (state == PeerConnection.IceConnectionState.FAILED) fail("ice-failed")
+            }
+
+            override fun onConnectionChange(state: PeerConnection.PeerConnectionState) {
+                Log.i(TAG, "peer connection: $state")
             }
 
             override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
@@ -282,6 +299,77 @@ class CameraWebRtcPeer(private val context: Context, private val manager: Camera
             JSONObject().put("version", 1).put("type", "error").put("code", detail.take(80))
         )
     }
+
+    private fun androidTurnUrls(urls: List<String>): List<String> {
+        if (!isEmulator()) return urls
+        val configuredHost =
+            "turn.${DeviceIdentity(context).baseHost() ?: BuildConfig.PLATFORM_HOST}"
+        // Android Emulator loopback points at the emulator itself. 10.0.2.2 is its host alias.
+        // Use UDP relay transport. A pair of TCP relay candidates is passive on both sides and
+        // cannot establish a media path, whereas UDP is NATed correctly to the host alias.
+        return urls
+            .filter { it.startsWith("turn:") && it.contains("transport=udp") }
+            .map { it.replace(configuredHost, "10.0.2.2") }
+    }
+
+    private fun candidateType(sdp: String): String =
+        Regex("\\btyp ([a-z]+)").find(sdp)?.groupValues?.getOrNull(1) ?: "unknown"
+
+    /** Diagnostic only: deliberately excludes the candidate address, port and credentials. */
+    private fun candidateSummary(sdp: String): String {
+        val transport =
+            Regex("^candidate:\\S+ \\d+ ([A-Za-z]+)").find(sdp)?.groupValues?.getOrNull(1)
+        val tcpType = Regex("\\btcptype ([a-z]+)").find(sdp)?.groupValues?.getOrNull(1)
+        return listOfNotNull(candidateType(sdp), transport?.lowercase(), tcpType).joinToString("/")
+    }
+
+    /** Attaches capture tracks to the transceivers created from the browser's remote offer. */
+    private fun configureSenders() {
+        val transceivers = connection.getTransceivers()
+        val video =
+            checkNotNull(
+                transceivers.firstOrNull {
+                    it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO && !it.isStopped
+                }
+            ) {
+                "Remote offer has no video transceiver"
+            }
+        val audio =
+            checkNotNull(
+                transceivers.firstOrNull {
+                    it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO && !it.isStopped
+                }
+            ) {
+                "Remote offer has no audio transceiver"
+            }
+
+        check(video.setDirection(RtpTransceiver.RtpTransceiverDirection.SEND_ONLY)) {
+            "Video transceiver rejected send-only direction"
+        }
+        check(audio.setDirection(RtpTransceiver.RtpTransceiverDirection.SEND_ONLY)) {
+            "Audio transceiver rejected send-only direction"
+        }
+        check(video.sender.setTrack(videoTrack, false)) { "Video sender rejected track" }
+        check(audio.sender.setTrack(audioTrack, false)) { "Audio sender rejected track" }
+        video.sender.setStreams(listOf("omniand"))
+        audio.sender.setStreams(listOf("omniand"))
+
+        // VP8 is available in both Firefox and the Android software encoder, including AVDs.
+        val vp8 =
+            factory
+                .getRtpSenderCapabilities(MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO)
+                .codecs
+                .filter { it.name.equals("VP8", ignoreCase = true) }
+        if (vp8.isNotEmpty()) video.setCodecPreferences(vp8)
+    }
+
+    private fun isEmulator(): Boolean =
+        Build.FINGERPRINT.startsWith("generic") ||
+            Build.FINGERPRINT.contains("/emu") ||
+            Build.MODEL.contains("Emulator", ignoreCase = true) ||
+            Build.PRODUCT.contains("sdk_gphone", ignoreCase = true) ||
+            Build.DEVICE.startsWith("emu") ||
+            Build.HARDWARE.contains("ranchu", ignoreCase = true)
 
     @Synchronized
     private fun startCapture() {

@@ -1,8 +1,11 @@
 package dev.omniand.hub.server
 
 import android.content.Context
+import dev.omniand.hub.BuildConfig
 import dev.omniand.hub.camera.CameraSessionManager
 import dev.omniand.hub.media.MediaUploadStore
+import dev.omniand.hub.pairing.DeviceIdentity
+import dev.omniand.hub.pairing.RemoteLinkSession
 import dev.omniand.hub.services.FilesService
 import dev.omniand.hub.sms.MmsUploadStore
 import io.ktor.http.ContentType
@@ -285,7 +288,26 @@ object KtorServer {
             }
             webSocket {
                 val manager = CameraSessionManager.instance(context)
-                val viewer = manager.openViewer(call.request.headers["User-Agent"].orEmpty())
+                val baseHost = DeviceIdentity(context).baseHost() ?: BuildConfig.PLATFORM_HOST
+                val stableHost =
+                    RemoteLinkSession.parseHost(
+                        call.request.headers["Host"].orEmpty().substringBefore(':').lowercase(),
+                        baseHost,
+                    )
+                        ?: run {
+                            close(
+                                CloseReason(
+                                    CloseReason.Codes.VIOLATED_POLICY,
+                                    "Invalid remote host",
+                                )
+                            )
+                            return@webSocket
+                        }
+                val viewer =
+                    manager.openViewer(
+                        call.request.headers["User-Agent"].orEmpty(),
+                        stableHost.publicLinkId,
+                    )
                 val receiver = launch {
                     try {
                         for (frame in incoming) {

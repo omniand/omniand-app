@@ -19,21 +19,25 @@ class CameraStreamingService : Service() {
                 NotificationChannel(CHANNEL, "Camera streaming", NotificationManager.IMPORTANCE_LOW)
             )
         startForeground(ID, notification())
-        runCatching {
-                CameraSessionManager.instance(this)
-                    .attach(CameraWebRtcPeer(this, CameraSessionManager.instance(this)))
+        Thread {
+                val manager = CameraSessionManager.instance(this)
+                runCatching {
+                        val publicLinkId = checkNotNull(manager.activePublicLinkId())
+                        val credentials = TurnCredentialsClient(this).issue(publicLinkId)
+                        manager.attach(CameraWebRtcPeer(this, manager, credentials), credentials)
+                    }
+                    .onFailure {
+                        manager.emit(
+                            org.json
+                                .JSONObject()
+                                .put("version", 1)
+                                .put("type", "error")
+                                .put("code", "turn-unavailable")
+                        )
+                        stopSelf()
+                    }
             }
-            .onFailure {
-                CameraSessionManager.instance(this)
-                    .emit(
-                        org.json
-                            .JSONObject()
-                            .put("version", 1)
-                            .put("type", "error")
-                            .put("code", "camera-unavailable")
-                    )
-                stopSelf()
-            }
+            .start()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

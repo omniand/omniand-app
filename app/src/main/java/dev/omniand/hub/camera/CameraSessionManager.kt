@@ -3,7 +3,6 @@ package dev.omniand.hub.camera
 import android.content.Context
 import android.content.Intent
 import android.util.Log
-import dev.omniand.hub.pairing.DeviceIdentity
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.UUID
@@ -20,7 +19,7 @@ class CameraSessionManager private constructor(private val context: Context) {
     private var viewer: Viewer? = null
     private var peer: CameraWebRtcPeer? = null
 
-    data class Viewer(val id: String, val events: Channel<String>)
+    data class Viewer(val id: String, val publicLinkId: String, val events: Channel<String>)
 
     private data class Pending(
         val id: String,
@@ -29,16 +28,16 @@ class CameraSessionManager private constructor(private val context: Context) {
         val expiresAt: Long,
     )
 
-    fun openViewer(userAgent: String): Viewer {
+    fun openViewer(userAgent: String, publicLinkId: String): Viewer {
         synchronized(lock) {
             expireLocked()
             val events = Channel<String>(16)
             if (viewer != null || pending != null) {
                 events.trySend(signal("busy"))
                 events.close()
-                return Viewer(UUID.randomUUID().toString(), events)
+                return Viewer(UUID.randomUUID().toString(), publicLinkId, events)
             }
-            val newViewer = Viewer(UUID.randomUUID().toString(), events)
+            val newViewer = Viewer(UUID.randomUUID().toString(), publicLinkId, events)
             viewer = newViewer
             val request =
                 Pending(
@@ -138,7 +137,7 @@ class CameraSessionManager private constructor(private val context: Context) {
     }
 
     /** Attaches the foreground-service owned peer and starts browser offer creation. */
-    fun attach(peer: CameraWebRtcPeer) =
+    fun attach(peer: CameraWebRtcPeer, credentials: TurnCredentials) =
         synchronized(lock) {
             if (viewer == null) {
                 peer.close()
@@ -147,8 +146,6 @@ class CameraSessionManager private constructor(private val context: Context) {
             this.peer?.close()
             this.peer = peer
             Log.i(TAG, "camera peer attached; sending ICE configuration")
-            val turnHost =
-                "turn.${DeviceIdentity(context).baseHost() ?: dev.omniand.hub.BuildConfig.PLATFORM_HOST}"
             emit(
                 JSONObject()
                     .put("version", 1)
@@ -159,11 +156,15 @@ class CameraSessionManager private constructor(private val context: Context) {
                             .JSONArray()
                             .put(
                                 JSONObject()
-                                    .put("urls", org.json.JSONArray().put("stun:$turnHost:3478"))
+                                    .put("urls", org.json.JSONArray(credentials.urls))
+                                    .put("username", credentials.browserUsername)
+                                    .put("credential", credentials.browserCredential)
                             ),
                     )
             )
         }
+
+    fun activePublicLinkId(): String? = synchronized(lock) { viewer?.publicLinkId }
 
     fun emit(message: JSONObject) {
         synchronized(lock) {
