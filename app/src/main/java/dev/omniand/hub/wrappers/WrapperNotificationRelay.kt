@@ -1,4 +1,4 @@
-package dev.omniand.hub.sms
+package dev.omniand.hub.wrappers
 
 import android.content.ComponentName
 import android.content.Context
@@ -6,43 +6,57 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
 import android.os.Parcel
-import dev.omniand.hub.wrappers.WrapperInstaller
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
+/** Publishes app-owned notifications through the trusted generated wrapper for that app. */
 object WrapperNotificationRelay {
-    private const val APP_ID = "messages"
-    private const val PACKAGE = "dev.omniand.generated.messages"
     private const val SERVICE = "dev.omniand.wrapper.runtime.NotificationRelayService"
-    private const val DESCRIPTOR = "dev.omniand.wrapper.NOTIFICATIONS/1"
+    private const val DESCRIPTOR = "dev.omniand.wrapper.NOTIFICATIONS/2"
 
     fun publish(
         context: Context,
-        threadId: String,
+        appId: String,
         notificationId: Int,
+        channelId: String,
+        channelName: String,
         title: String,
-        preview: String,
-        timestamp: Long,
+        text: String,
+        publicTitle: String = title,
+        publicText: String = "New notification",
+        route: String? = null,
+        threadId: String? = null,
+        timestamp: Long = 0,
+        timeoutMillis: Long = 0,
     ): Boolean =
-        call(context, 1) {
-            writeString(APP_ID)
-            writeString(threadId)
+        call(context, appId, TRANSACTION_PUBLISH) {
+            writeString(appId)
             writeInt(notificationId)
+            writeString(channelId)
+            writeString(channelName)
             writeString(title)
-            writeString(preview)
-            writeLong(timestamp)
-        }
-
-    fun cancelThread(context: Context, threadId: String): Boolean =
-        call(context, 2) {
-            writeString(APP_ID)
+            writeString(text)
+            writeString(publicTitle)
+            writeString(publicText)
+            writeString(route)
             writeString(threadId)
+            writeLong(timestamp)
+            writeLong(timeoutMillis)
         }
 
-    fun cancelAll(context: Context): Boolean = call(context, 3) { writeString(APP_ID) }
+    fun cancel(context: Context, appId: String, notificationId: Int): Boolean =
+        call(context, appId, TRANSACTION_CANCEL) {
+            writeString(appId)
+            writeInt(notificationId)
+        }
 
-    private fun call(context: Context, code: Int, payload: Parcel.() -> Unit): Boolean {
-        if (!WrapperInstaller.isTrustedWrapper(context, APP_ID)) return false
+    private fun call(
+        context: Context,
+        appId: String,
+        code: Int,
+        payload: Parcel.() -> Unit,
+    ): Boolean {
+        if (!WrapperInstaller.isTrustedWrapper(context, appId)) return false
         val latch = CountDownLatch(1)
         var result = false
         val connection =
@@ -72,7 +86,7 @@ object WrapperNotificationRelay {
         val bound =
             runCatching {
                     context.bindService(
-                        Intent().setClassName(PACKAGE, SERVICE),
+                        Intent().setClassName(WrapperInstaller.packageName(appId), SERVICE),
                         connection,
                         Context.BIND_AUTO_CREATE,
                     )
@@ -86,4 +100,7 @@ object WrapperNotificationRelay {
             runCatching { context.unbindService(connection) }
         }
     }
+
+    private const val TRANSACTION_PUBLISH = 1
+    private const val TRANSACTION_CANCEL = 2
 }

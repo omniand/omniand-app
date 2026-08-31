@@ -18,13 +18,12 @@ import androidx.core.app.NotificationCompat;
 import java.security.MessageDigest;
 
 /**
- * Private Binder endpoint through which the Platform asks a generated wrapper to own Messages
+ * Private Binder endpoint through which the Platform asks a generated wrapper to own its
  * notifications. Every transaction verifies the caller's package and embedded Platform signing
  * certificate; malformed payloads fail without publishing a notification.
  */
 public final class NotificationRelayService extends Service {
-    private static final String DESCRIPTOR = "dev.omniand.wrapper.NOTIFICATIONS/1";
-    private static final String CHANNEL = "incoming-messages";
+    private static final String DESCRIPTOR = "dev.omniand.wrapper.NOTIFICATIONS/2";
     private String appId;
     private String platformCertificate;
 
@@ -63,18 +62,32 @@ public final class NotificationRelayService extends Service {
                             throw new SecurityException("Wrong app id");
                         boolean ok;
                         if (code == 1) {
-                            String thread = data.readString();
                             int id = data.readInt();
+                            String channel = data.readString();
+                            String channelName = data.readString();
                             String title = data.readString();
-                            String preview = data.readString();
+                            String text = data.readString();
+                            String publicTitle = data.readString();
+                            String publicText = data.readString();
+                            String route = data.readString();
+                            String threadId = data.readString();
                             long timestamp = data.readLong();
-                            ok = publish(thread, id, title, preview, timestamp);
+                            long timeoutMillis = data.readLong();
+                            ok =
+                                    publish(
+                                            id,
+                                            channel,
+                                            channelName,
+                                            title,
+                                            text,
+                                            publicTitle,
+                                            publicText,
+                                            route,
+                                            threadId,
+                                            timestamp,
+                                            timeoutMillis);
                         } else if (code == 2) {
-                            String thread = data.readString();
-                            cancel(thread.hashCode() & 0x7fffffff);
-                            ok = true;
-                        } else if (code == 3) {
-                            manager().cancelAll();
+                            cancel(data.readInt());
                             ok = true;
                         } else return super.onTransact(code, data, reply, flags);
                         reply.writeNoException();
@@ -117,12 +130,39 @@ public final class NotificationRelayService extends Service {
         }
     }
 
-    private boolean publish(String thread, int id, String title, String preview, long timestamp) {
-        if (!thread.matches("[0-9]+")
+    private boolean publish(
+            int id,
+            String channel,
+            String channelName,
+            String title,
+            String text,
+            String publicTitle,
+            String publicText,
+            String route,
+            String threadId,
+            long timestamp,
+            long timeoutMillis) {
+        if (id < 0
+                || channel == null
+                || !channel.matches("[a-z0-9][a-z0-9-]{0,39}")
+                || channelName == null
+                || channelName.isEmpty()
+                || channelName.length() > 80
                 || title == null
-                || preview == null
+                || title.isEmpty()
                 || title.length() > 160
-                || preview.length() > 500) return false;
+                || text == null
+                || text.length() > 500
+                || publicTitle == null
+                || publicTitle.isEmpty()
+                || publicTitle.length() > 160
+                || publicText == null
+                || publicText.length() > 500
+                || (route != null && route.length() > 2200)
+                || (threadId != null && threadId.length() > 100)
+                || timestamp < 0
+                || timeoutMillis < 0
+                || timeoutMillis > 120_000) return false;
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                         != PackageManager.PERMISSION_GRANTED) return false;
@@ -130,35 +170,36 @@ public final class NotificationRelayService extends Service {
             manager()
                     .createNotificationChannel(
                             new NotificationChannel(
-                                    CHANNEL, "Messages", NotificationManager.IMPORTANCE_HIGH));
-        Intent click =
-                new Intent()
-                        .setClassName("dev.omniand.launcher", "dev.omniand.hub.WebAppActivity")
-                        .putExtra("appId", appId)
-                        .putExtra("route", "#/thread?id=" + thread)
-                        .putExtra("threadId", thread);
+                                    channel, channelName, NotificationManager.IMPORTANCE_HIGH));
+        Intent click = new Intent(this, MainActivity.class);
+        if (route != null) click.putExtra("route", route);
+        if (threadId != null) click.putExtra("threadId", threadId);
         PendingIntent pending =
                 PendingIntent.getActivity(
                         this,
                         id,
                         click,
                         PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        int icon = getApplicationInfo().icon;
+        if (icon == 0) icon = android.R.drawable.ic_dialog_info;
         NotificationCompat.Builder publicBuilder =
-                new NotificationCompat.Builder(this, CHANNEL)
-                        .setSmallIcon(android.R.drawable.sym_action_chat)
-                        .setContentTitle("Messages")
-                        .setContentText("New message");
-        android.app.Notification notification =
-                new NotificationCompat.Builder(this, CHANNEL)
-                        .setSmallIcon(android.R.drawable.sym_action_chat)
+                new NotificationCompat.Builder(this, channel)
+                        .setSmallIcon(icon)
+                        .setContentTitle(publicTitle)
+                        .setContentText(publicText);
+        NotificationCompat.Builder builder =
+                new NotificationCompat.Builder(this, channel)
+                        .setSmallIcon(icon)
                         .setContentTitle(title)
-                        .setContentText(preview)
-                        .setWhen(timestamp)
+                        .setContentText(text)
                         .setAutoCancel(true)
+                        .setCategory(NotificationCompat.CATEGORY_EVENT)
                         .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
                         .setPublicVersion(publicBuilder.build())
-                        .setContentIntent(pending)
-                        .build();
+                        .setContentIntent(pending);
+        if (timestamp > 0) builder.setWhen(timestamp);
+        if (timeoutMillis > 0) builder.setTimeoutAfter(timeoutMillis);
+        android.app.Notification notification = builder.build();
         manager().notify(id, notification);
         return true;
     }

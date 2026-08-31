@@ -1,8 +1,12 @@
 package dev.omniand.hub.camera
 
 import android.content.Context
+import android.hardware.SensorManager
+import android.os.Build
 import android.os.Looper
 import android.util.Size
+import android.view.OrientationEventListener
+import android.view.Surface
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -35,8 +39,22 @@ class CameraXCapturer(
     private var analysis: ImageAnalysis? = null
     private var selected = CameraFacing.BACK
     private var lastFrameTimestamp = 0L
+    private var targetRotation = Surface.ROTATION_0
+    private val zoomReliable = hasReliableCameraZoom(Build.HARDWARE)
+    private val orientationListener =
+        object : OrientationEventListener(context, SensorManager.SENSOR_DELAY_NORMAL) {
+            override fun onOrientationChanged(orientation: Int) {
+                val rotation = targetRotationForOrientation(orientation) ?: return
+                ContextCompat.getMainExecutor(context).execute {
+                    if (closed.get() || targetRotation == rotation) return@execute
+                    targetRotation = rotation
+                    analysis?.targetRotation = rotation
+                }
+            }
+        }
 
     fun start() {
+        if (orientationListener.canDetectOrientation()) orientationListener.enable()
         val future = ProcessCameraProvider.getInstance(context)
         future.addListener(
             {
@@ -85,6 +103,7 @@ class CameraXCapturer(
 
     fun setZoom(ratio: Double): String? {
         if (!ratio.isFinite()) return "zoom-out-of-range"
+        if (!zoomReliable) return "zoom-out-of-range"
         val current = camera ?: return "camera-not-ready"
         val zoom = current.cameraInfo.zoomState.value ?: return "camera-not-ready"
         if (ratio < zoom.minZoomRatio || ratio > zoom.maxZoomRatio) return "zoom-out-of-range"
@@ -102,6 +121,7 @@ class CameraXCapturer(
     fun close() {
         if (!closed.compareAndSet(false, true)) return
         val release = {
+            orientationListener.disable()
             analysis?.clearAnalyzer()
             analysis = null
             provider?.unbindAll()
@@ -123,6 +143,7 @@ class CameraXCapturer(
             ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+                .setTargetRotation(targetRotation)
                 .setResolutionSelector(
                     ResolutionSelector.Builder()
                         .setResolutionStrategy(
@@ -193,14 +214,15 @@ class CameraXCapturer(
     ): CameraHardwareState {
         val info = camera?.cameraInfo
         val zoom = info?.zoomState?.value
+        val currentZoom = if (zoomReliable) zoom?.zoomRatio ?: 1f else 1f
         return CameraHardwareState(
             front = facingAvailable(CameraFacing.FRONT),
             back = facingAvailable(CameraFacing.BACK),
             torch = info?.hasFlashUnit() == true,
             torchEnabled = optimisticTorch ?: (info?.torchState?.value == TorchState.ON),
-            minZoom = zoom?.minZoomRatio ?: 1f,
-            maxZoom = zoom?.maxZoomRatio ?: 1f,
-            zoom = optimisticZoom ?: zoom?.zoomRatio ?: 1f,
+            minZoom = if (zoomReliable) zoom?.minZoomRatio ?: 1f else 1f,
+            maxZoom = if (zoomReliable) zoom?.maxZoomRatio ?: 1f else 1f,
+            zoom = if (zoomReliable) optimisticZoom ?: currentZoom else 1f,
             camera = selected,
         )
     }
@@ -216,6 +238,21 @@ class CameraXCapturer(
         const val MAX_WIDTH = 1280
         const val MAX_HEIGHT = 720
         const val MIN_FRAME_INTERVAL_NS = 1_000_000_000L / 30
+    }
+}
+
+/** Emulator HALs advertise zoom ranges but reject their own zoom capture requests. */
+internal fun hasReliableCameraZoom(hardware: String): Boolean =
+    hardware != "goldfish" && hardware != "ranchu"
+
+/** Maps the physical device angle to the surface rotation expected by CameraX. */
+internal fun targetRotationForOrientation(orientation: Int): Int? {
+    if (orientation !in 0..359) return null
+    return when (orientation) {
+        in 45 until 135 -> Surface.ROTATION_270
+        in 135 until 225 -> Surface.ROTATION_180
+        in 225 until 315 -> Surface.ROTATION_90
+        else -> Surface.ROTATION_0
     }
 }
 

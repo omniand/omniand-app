@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import dev.omniand.hub.MainActivity
 import dev.omniand.hub.WebAppActivity
+import dev.omniand.hub.wrappers.WrapperNotificationRelay
 
 object SmsNotifications {
     private const val CHANNEL = "incoming-messages"
@@ -25,12 +26,18 @@ object SmsNotifications {
     ) {
         if (
             WrapperNotificationRelay.publish(
-                context,
-                threadId,
-                notificationId(threadId),
-                title,
-                preview,
-                timestamp,
+                context = context,
+                appId = "messages",
+                notificationId = notificationId(threadId),
+                channelId = CHANNEL,
+                channelName = "Messages",
+                title = title,
+                text = preview,
+                publicTitle = "Messages",
+                publicText = "New message",
+                route = "#/thread?id=$threadId",
+                threadId = threadId,
+                timestamp = timestamp,
             )
         )
             return
@@ -92,7 +99,7 @@ object SmsNotifications {
         )
 
     fun cancelThread(context: Context, threadId: String) {
-        WrapperNotificationRelay.cancelThread(context, threadId)
+        WrapperNotificationRelay.cancel(context, "messages", notificationId(threadId))
         NotificationManagerCompat.from(context).cancel(notificationId(threadId))
     }
 

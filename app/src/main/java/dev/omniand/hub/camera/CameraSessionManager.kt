@@ -12,6 +12,7 @@ import android.os.Build
 import android.util.Log
 import dev.omniand.hub.R
 import dev.omniand.hub.pairing.RemoteLinksClient
+import dev.omniand.hub.wrappers.WrapperNotificationRelay
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.UUID
@@ -294,6 +295,19 @@ class CameraSessionManager private constructor(private val context: Context) {
     }
 
     private fun showApprovalNotification(pending: CameraSessionStateMachine.State.PendingApproval) {
+        if (
+            WrapperNotificationRelay.publish(
+                context = context,
+                appId = CAMERA_APP_ID,
+                notificationId = REQUEST_NOTIFICATION_ID,
+                channelId = REQUEST_CHANNEL,
+                channelName = "Camera requests",
+                title = "Camera request",
+                text = "${pending.viewerName} wants to use the camera and microphone.",
+                timeoutMillis = APPROVAL_MILLIS,
+            )
+        )
+            return
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
             NotificationChannel(
@@ -328,6 +342,7 @@ class CameraSessionManager private constructor(private val context: Context) {
     }
 
     private fun cancelApprovalNotification() {
+        WrapperNotificationRelay.cancel(context, CAMERA_APP_ID, REQUEST_NOTIFICATION_ID)
         context.getSystemService(NotificationManager::class.java).cancel(REQUEST_NOTIFICATION_ID)
     }
 
@@ -355,6 +370,7 @@ class CameraSessionManager private constructor(private val context: Context) {
         private const val APPROVAL_MILLIS = 60_000L
         private const val EVENT_QUEUE_SIZE = 64
         private const val MAX_ERROR_CODE = 80
+        private const val CAMERA_APP_ID = "camera"
         private const val REQUEST_CHANNEL = "camera-requests"
         // Must not collide with BackgroundHostingService's foreground notification (7401).
         private const val REQUEST_NOTIFICATION_ID = 7403

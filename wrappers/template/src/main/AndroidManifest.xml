@@ -11,7 +11,7 @@
             android:value="OMNIAND_APP_ID_PLACEHOLDER_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" />
         <meta-data
             android:name="dev.omniand.RELAY_VERSION"
-            android:value="1" />
+            android:value="2" />
         <meta-data
             android:name="dev.omniand.PLATFORM_CERT"
             android:value="OMNIAND_PLATFORM_CERT_PLACEHOLDER_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" />
