@@ -3,6 +3,7 @@ package dev.omniand.hub.server
 import android.content.Context
 import dev.omniand.hub.BuildConfig
 import dev.omniand.hub.camera.CameraSessionManager
+import dev.omniand.hub.camera.CameraSignalValidator
 import dev.omniand.hub.media.MediaUploadStore
 import dev.omniand.hub.pairing.DeviceIdentity
 import dev.omniand.hub.pairing.RemoteLinkSession
@@ -287,6 +288,7 @@ object KtorServer {
                 authorize = { authorizeCameraWebSocket(context) }
             }
             webSocket {
+                android.util.Log.i("OmniAndCamera", "camera websocket connected")
                 val manager = CameraSessionManager.instance(context)
                 val baseHost = DeviceIdentity(context).baseHost() ?: BuildConfig.PLATFORM_HOST
                 val stableHost =
@@ -331,11 +333,14 @@ object KtorServer {
                                 break
                             }
                             val signal = runCatching { JSONObject(message) }.getOrNull()
-                            if (
-                                signal == null ||
-                                    signal.optInt("version", -1) != 1 ||
-                                    signal.optString("type").isBlank()
-                            ) {
+                            val validationError =
+                                if (signal == null) "invalid-json"
+                                else CameraSignalValidator.error(signal)
+                            if (validationError != null) {
+                                android.util.Log.w(
+                                    "OmniAndCamera",
+                                    "Rejected browser signal: $validationError",
+                                )
                                 close(
                                     CloseReason(
                                         CloseReason.Codes.NOT_CONSISTENT,
@@ -344,7 +349,7 @@ object KtorServer {
                                 )
                                 break
                             }
-                            manager.signal(viewer.id, signal)
+                            manager.signal(viewer.id, checkNotNull(signal))
                         }
                     } finally {
                         manager.disconnect(viewer.id)
@@ -355,6 +360,11 @@ object KtorServer {
                 } finally {
                     receiver.cancel()
                     manager.disconnect(viewer.id)
+                    val reason = runCatching { closeReason.await() }.getOrNull()
+                    android.util.Log.i(
+                        "OmniAndCamera",
+                        "camera websocket closed: ${reason?.code ?: "unknown"}",
+                    )
                 }
             }
         }
@@ -374,15 +384,25 @@ object KtorServer {
                 "/api/camera/webrtc",
                 request.platformHeaders(),
             )
+        return authorizeCameraWebSocket(
+            requestContext,
+            request.headers["Origin"],
+            requestContext != null &&
+                PlatformServer.hasCapability(context, requestContext, "camera.stream"),
+        )
+    }
+
+    internal fun authorizeCameraWebSocket(
+        requestContext: PlatformRequestContext?,
+        origin: String?,
+        hasCapability: Boolean,
+    ): WebSocketAccess {
         return when {
             requestContext == null -> WebSocketAccess.UNAUTHORIZED
             requestContext.transport != PlatformRequestContext.Transport.DESKTOP_HTTP ->
                 WebSocketAccess.FORBIDDEN
-            requestContext.app?.id != "camera" ||
-                !PlatformServer.hasCapability(context, requestContext, "camera.stream") ->
-                WebSocketAccess.FORBIDDEN
-            request.headers["Origin"] != "https://${requestContext.hostname}" ->
-                WebSocketAccess.FORBIDDEN
+            requestContext.app?.id != "camera" || !hasCapability -> WebSocketAccess.FORBIDDEN
+            origin != "https://${requestContext.hostname}" -> WebSocketAccess.FORBIDDEN
             else -> WebSocketAccess.ALLOWED
         }
     }

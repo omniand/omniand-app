@@ -1,16 +1,14 @@
 package dev.omniand.hub.camera
 
 import android.content.Context
-import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import androidx.lifecycle.LifecycleOwner
 import dev.omniand.hub.BuildConfig
-import dev.omniand.hub.pairing.DeviceIdentity
 import org.json.JSONObject
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
-import org.webrtc.Camera2Capturer
-import org.webrtc.Camera2Enumerator
-import org.webrtc.CameraVideoCapturer
 import org.webrtc.DefaultVideoDecoderFactory
 import org.webrtc.DefaultVideoEncoderFactory
 import org.webrtc.EglBase
@@ -22,41 +20,41 @@ import org.webrtc.PeerConnectionFactory
 import org.webrtc.RtpTransceiver
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
-import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 
-/** Owns native WebRTC capture resources for exactly one foreground-approved viewing session. */
+/** Owns CameraX, audio, and one reusable native PeerConnection for an approved session. */
 class CameraWebRtcPeer(
     private val context: Context,
+    lifecycleOwner: LifecycleOwner,
     private val manager: CameraSessionManager,
     credentials: TurnCredentials,
 ) {
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val factory: PeerConnectionFactory
     private val eglBase: EglBase
     private val videoSource: VideoSource
     private val audioSource: AudioSource
-    private val capturer: Camera2Capturer
-    private val helper: SurfaceTextureHelper
     private val connection: PeerConnection
-    // Keep Java wrappers alive for the entire capture lifetime. The native peer connection does
-    // not own those wrappers and recent WebRTC releases otherwise can receive a camera frame with
-    // no attached video sink.
     private val videoTrack: VideoTrack
     private val audioTrack: AudioTrack
-
-    @Volatile private var captureStarted = false
-    private val pendingCandidates = mutableListOf<IceCandidate>()
+    private val capturer: CameraXCapturer
+    private var rtcConfiguration = configuration(credentials)
+    private var microphone = true
+    private var captureStarted = false
+    private var closed = false
     private var remoteDescriptionSet = false
+    private val pendingCandidates = ArrayDeque<IceCandidate>()
+    private var disconnectedTimeout: Runnable? = null
+    private var negotiationTimeout: Runnable? = null
+    private var initialFailureTimeout: Runnable? = null
+    private var everConnected = false
 
     init {
         PeerConnectionFactory.initialize(
             PeerConnectionFactory.InitializationOptions.builder(context)
                 .createInitializationOptions()
         )
-        // The current WebRTC SDK does not supply video codec factories when the builder is
-        // left at its defaults. Its worker thread then aborts as soon as a video sender is
-        // created. Keep one EGL context shared by capture and the hardware/software factories.
         eglBase = EglBase.create()
         factory =
             PeerConnectionFactory.builder()
@@ -66,47 +64,8 @@ class CameraWebRtcPeer(
                 .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase.eglBaseContext))
                 .createPeerConnectionFactory()
         videoSource = factory.createVideoSource(false)
+        videoSource.adaptOutputFormat(MAX_WIDTH, MAX_HEIGHT, MAX_FPS)
         audioSource = factory.createAudioSource(MediaConstraints())
-        val enumerator = Camera2Enumerator(context)
-        val camera =
-            enumerator.deviceNames.firstOrNull { enumerator.isBackFacing(it) }
-                ?: enumerator.deviceNames.firstOrNull()
-                ?: error("No camera available")
-        capturer =
-            Camera2Capturer(
-                context,
-                camera,
-                object : CameraVideoCapturer.CameraEventsHandler {
-                    override fun onCameraError(errorDescription: String) = fail("camera-error")
-
-                    override fun onCameraDisconnected() = fail("camera-disconnected")
-
-                    override fun onCameraFreezed(errorDescription: String) = fail("camera-frozen")
-
-                    override fun onCameraOpening(cameraName: String) = Unit
-
-                    override fun onFirstFrameAvailable() {
-                        Log.i(TAG, "first camera frame delivered to WebRTC")
-                    }
-
-                    override fun onCameraClosed() = Unit
-                },
-            )
-        helper = SurfaceTextureHelper.create("OmniAndCamera", eglBase.eglBaseContext)
-        val servers =
-            androidTurnUrls(credentials.urls).map { url ->
-                PeerConnection.IceServer.builder(url)
-                    .setUsername(credentials.androidUsername)
-                    .setPassword(credentials.androidCredential)
-                    .createIceServer()
-            }
-        Log.i(TAG, "configured ${servers.size} ICE server URL(s); emulator=${isEmulator()}")
-        val rtcConfiguration = PeerConnection.RTCConfiguration(servers)
-        // The emulator's 10.0.2.x candidates are private to its virtual NAT,
-        // so they cannot be reached by a desktop browser. Force its side onto
-        // a TURN allocation; physical devices retain direct ICE first.
-        if (isEmulator())
-            rtcConfiguration.iceTransportsType = PeerConnection.IceTransportsType.RELAY
         connection =
             factory.createPeerConnection(rtcConfiguration, observer())
                 ?: error("PeerConnection unavailable")
@@ -115,131 +74,121 @@ class CameraWebRtcPeer(
         videoTrack.setEnabled(true)
         audioTrack.setEnabled(true)
         connection.setAudioPlayout(false)
-        // Initializing does not open the camera. Wait for the browser's offer before delivering
-        // a frame, so the sender is negotiated before native video processing begins.
-        capturer.initialize(helper, context, videoSource.capturerObserver)
+        capturer =
+            CameraXCapturer(
+                context,
+                lifecycleOwner,
+                videoSource.capturerObserver,
+                onState = { manager.emit(it.toJson(microphone)) },
+                onFailure = manager::fatal,
+            )
     }
 
+    /** Accepts initial and ICE-restart offers without replacing the native connection. */
     fun offer(sdp: String) {
-        if (sdp.length !in 1..MAX_SDP) return
-        Log.i(TAG, "setting browser offer")
+        if (closed || sdp.length !in 1..CameraSignalValidator.MAX_SDP) return
+        Log.i(TAG, "remote offer received")
+        scheduleNegotiationTimeout()
+        synchronized(this) { remoteDescriptionSet = false }
         connection.setRemoteDescription(
-            object : SdpObserver {
-                override fun onCreateSuccess(description: SessionDescription) = Unit
-
+            object : SdpObserverAdapter() {
                 override fun onSetSuccess() {
-                    Log.i(TAG, "browser offer accepted")
+                    Log.i(TAG, "remote offer accepted")
                     val queued =
                         synchronized(this@CameraWebRtcPeer) {
                             remoteDescriptionSet = true
                             pendingCandidates.toList().also { pendingCandidates.clear() }
                         }
                     queued.forEach(connection::addIceCandidate)
-                    configureSenders()
-                    createAnswer()
-                }
-
-                override fun onCreateFailure(error: String) {
-                    fail(error)
+                    runCatching { configureSenders() }
+                        .onSuccess { createAnswer() }
+                        .onFailure { manager.fatal("invalid-offer") }
                 }
 
                 override fun onSetFailure(error: String) {
-                    fail(error)
+                    Log.w(TAG, "remote offer rejected: ${error.take(160)}")
+                    manager.fatal("offer-rejected")
                 }
             },
             SessionDescription(SessionDescription.Type.OFFER, sdp),
         )
     }
 
-    private fun createAnswer() {
-        Log.i(TAG, "creating answer")
-        connection.createAnswer(
-            object : SdpObserver {
-                override fun onCreateSuccess(answer: SessionDescription) {
-                    Log.i(TAG, "answer created")
-                    connection.setLocalDescription(
-                        object : SdpObserver {
-                            override fun onCreateSuccess(description: SessionDescription) = Unit
-
-                            override fun onSetSuccess() {
-                                Log.i(TAG, "answer accepted locally")
-                                manager.emit(
-                                    JSONObject()
-                                        .put("version", 1)
-                                        .put("type", "answer")
-                                        .put("sdp", answer.description)
-                                )
-                                startCapture()
-                            }
-
-                            override fun onCreateFailure(error: String) {
-                                fail(error)
-                            }
-
-                            override fun onSetFailure(error: String) {
-                                fail(error)
-                            }
-                        },
-                        answer,
-                    )
+    fun candidate(value: JSONObject) {
+        if (closed) return
+        val candidate = value.optString("candidate")
+        if (candidate.length !in 1..CameraSignalValidator.MAX_CANDIDATE) return
+        val nativeCandidate =
+            IceCandidate(
+                value.optString("sdpMid"),
+                value.optInt("sdpMLineIndex", 0),
+                candidate,
+            )
+        val applyNow =
+            synchronized(this) {
+                if (remoteDescriptionSet) true
+                else {
+                    if (pendingCandidates.size >= CameraSignalValidator.MAX_PENDING_CANDIDATES) {
+                        manager.fatal("ice-queue-overflow")
+                        return
+                    }
+                    pendingCandidates.addLast(nativeCandidate)
+                    false
                 }
-
-                override fun onSetSuccess() = Unit
-
-                override fun onCreateFailure(error: String) {
-                    fail(error)
-                }
-
-                override fun onSetFailure(error: String) {
-                    fail(error)
-                }
-            },
-            MediaConstraints(),
-        )
+            }
+        if (applyNow) connection.addIceCandidate(nativeCandidate)
     }
 
-    fun candidate(value: JSONObject) {
-        val candidate = value.optString("candidate")
-        if (candidate.length in 1..MAX_CANDIDATE) {
-            Log.i(TAG, "browser ICE candidate: ${candidateSummary(candidate)}")
-            val nativeCandidate =
-                IceCandidate(
-                    value.optString("sdpMid"),
-                    value.optInt("sdpMLineIndex", 0),
-                    candidate,
-                )
-            val applyNow =
-                synchronized(this) {
-                    if (remoteDescriptionSet) true
-                    else {
-                        pendingCandidates += nativeCandidate
-                        false
-                    }
-                }
-            if (applyNow) connection.addIceCandidate(nativeCandidate)
+    /** Applies only controls supported by the current CameraX binding. */
+    fun control(value: JSONObject) {
+        if (closed) return
+        mainHandler.post {
+            var error: String? = null
+            if (value.has("camera")) {
+                val facing = CameraFacing.fromWireName(value.optString("camera"))
+                error = facing?.let(capturer::switchCamera) ?: "camera-unavailable"
+            }
+            if (error == null && value.has("torch"))
+                error = capturer.setTorch(value.getBoolean("torch"))
+            if (error == null && value.has("zoom"))
+                error = capturer.setZoom(value.getDouble("zoom"))
+            if (error == null && value.has("microphone")) {
+                microphone = value.getBoolean("microphone")
+                audioTrack.setEnabled(microphone)
+                manager.emit(capturer.state().toJson(microphone))
+            }
+            if (error != null) manager.emitError(error)
         }
     }
 
-    fun control(value: JSONObject) {
-        if (value.has("microphone")) connection.setAudioRecording(value.optBoolean("microphone"))
-        if (value.has("camera"))
-            capturer.switchCamera(
-                null,
-                if (value.optString("camera") == "front")
-                    Camera2Enumerator(context).deviceNames.firstOrNull {
-                        Camera2Enumerator(context).isFrontFacing(it)
-                    }
-                else
-                    Camera2Enumerator(context).deviceNames.firstOrNull {
-                        Camera2Enumerator(context).isBackFacing(it)
-                    },
-            )
+    /** Installs renewed credentials in place before the browser creates its restart offer. */
+    fun updateIceServers(credentials: TurnCredentials): Boolean {
+        if (closed) return false
+        rtcConfiguration = configuration(credentials)
+        return connection.setConfiguration(rtcConfiguration)
     }
 
     fun close() {
-        if (captureStarted) runCatching { capturer.stopCapture() }
-        capturer.dispose()
-        helper.dispose()
+        val shouldDispose =
+            synchronized(this) {
+                if (closed) false
+                else {
+                    closed = true
+                    true
+                }
+            }
+        if (!shouldDispose) return
+        if (Looper.myLooper() == Looper.getMainLooper()) dispose() else mainHandler.post(::dispose)
+    }
+
+    /** Native WebRTC and CameraX teardown must not run inside a WebRTC callback thread. */
+    private fun dispose() {
+        cancelDisconnectedTimeout()
+        cancelNegotiationTimeout()
+        cancelInitialFailureTimeout()
+        synchronized(this) { pendingCandidates.clear() }
+        if (captureStarted) capturer.close()
+        connection.close()
         connection.dispose()
         videoTrack.dispose()
         audioTrack.dispose()
@@ -247,6 +196,73 @@ class CameraWebRtcPeer(
         audioSource.dispose()
         factory.dispose()
         eglBase.release()
+    }
+
+    private fun createAnswer() {
+        connection.createAnswer(
+            object : SdpObserverAdapter() {
+                override fun onCreateSuccess(description: SessionDescription) {
+                    Log.i(TAG, "local answer created")
+                    connection.setLocalDescription(
+                        object : SdpObserverAdapter() {
+                            override fun onSetSuccess() {
+                                Log.i(TAG, "local answer set; starting capture")
+                                manager.emit(
+                                    JSONObject()
+                                        .put("version", 1)
+                                        .put("type", "answer")
+                                        .put("sdp", description.description)
+                                )
+                                startCapture()
+                            }
+
+                            override fun onSetFailure(error: String) =
+                                manager.fatal("answer-rejected")
+                        },
+                        description,
+                    )
+                }
+
+                override fun onCreateFailure(error: String) = manager.fatal("answer-failed")
+            },
+            MediaConstraints(),
+        )
+    }
+
+    /** Reuses the remote offer's transceivers and bounds outgoing video adaptation. */
+    private fun configureSenders() {
+        val transceivers = connection.transceivers
+        val video =
+            checkNotNull(
+                transceivers.firstOrNull {
+                    it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO && !it.isStopped
+                }
+            )
+        val audio =
+            checkNotNull(
+                transceivers.firstOrNull {
+                    it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO && !it.isStopped
+                }
+            )
+        check(video.setDirection(RtpTransceiver.RtpTransceiverDirection.SEND_ONLY))
+        check(audio.setDirection(RtpTransceiver.RtpTransceiverDirection.SEND_ONLY))
+        check(video.sender.setTrack(videoTrack, false))
+        check(audio.sender.setTrack(audioTrack, false))
+        video.sender.setStreams(listOf("omniand"))
+        audio.sender.setStreams(listOf("omniand"))
+        val parameters = video.sender.parameters
+        parameters.encodings.forEach {
+            it.maxFramerate = MAX_FPS
+            it.maxBitrateBps = MAX_VIDEO_BITRATE
+        }
+        video.sender.setParameters(parameters)
+    }
+
+    @Synchronized
+    private fun startCapture() {
+        if (captureStarted || closed) return
+        captureStarted = true
+        capturer.start()
     }
 
     private fun observer() =
@@ -267,16 +283,33 @@ class CameraWebRtcPeer(
                 )
             }
 
-            override fun onIceCandidatesRemoved(candidates: Array<IceCandidate>) = Unit
-
             override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
                 Log.i(TAG, "ICE connection: $state")
-                if (state == PeerConnection.IceConnectionState.FAILED) fail("ice-failed")
+                when (state) {
+                    PeerConnection.IceConnectionState.DISCONNECTED -> scheduleDisconnectedTimeout()
+                    PeerConnection.IceConnectionState.FAILED -> {
+                        if (everConnected) manager.fatal("ice-failed")
+                        else scheduleInitialFailureTimeout()
+                    }
+                    PeerConnection.IceConnectionState.CONNECTED,
+                    PeerConnection.IceConnectionState.COMPLETED -> {
+                        everConnected = true
+                        cancelDisconnectedTimeout()
+                        cancelNegotiationTimeout()
+                        cancelInitialFailureTimeout()
+                    }
+                    else -> Unit
+                }
             }
 
             override fun onConnectionChange(state: PeerConnection.PeerConnectionState) {
-                Log.i(TAG, "peer connection: $state")
+                if (state == PeerConnection.PeerConnectionState.FAILED) {
+                    if (everConnected) manager.fatal("peer-failed")
+                    else scheduleInitialFailureTimeout()
+                }
             }
+
+            override fun onIceCandidatesRemoved(candidates: Array<IceCandidate>) = Unit
 
             override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
 
@@ -293,98 +326,116 @@ class CameraWebRtcPeer(
             override fun onRenegotiationNeeded() = Unit
         }
 
-    private fun fail(detail: String) {
-        Log.e(TAG, "WebRTC failure: ${detail.take(80)}")
-        manager.emit(
-            JSONObject().put("version", 1).put("type", "error").put("code", detail.take(80))
-        )
+    private fun scheduleDisconnectedTimeout() {
+        cancelDisconnectedTimeout()
+        val timeout = Runnable { manager.fatal("ice-disconnected") }
+        disconnectedTimeout = timeout
+        mainHandler.postDelayed(timeout, DISCONNECTED_GRACE_MILLIS)
+    }
+
+    private fun cancelDisconnectedTimeout() {
+        disconnectedTimeout?.let(mainHandler::removeCallbacks)
+        disconnectedTimeout = null
+    }
+
+    /** Prevents a TURN outage from leaving capture active forever in NEW/CHECKING. */
+    private fun scheduleNegotiationTimeout() {
+        cancelNegotiationTimeout()
+        val timeout = Runnable { manager.fatal("ice-timeout") }
+        negotiationTimeout = timeout
+        mainHandler.postDelayed(timeout, NEGOTIATION_TIMEOUT_MILLIS)
+    }
+
+    private fun cancelNegotiationTimeout() {
+        negotiationTimeout?.let(mainHandler::removeCallbacks)
+        negotiationTimeout = null
+    }
+
+    /** Allows relay candidates that are still trickling when native ICE first reports FAILED. */
+    private fun scheduleInitialFailureTimeout() {
+        cancelInitialFailureTimeout()
+        val timeout = Runnable { manager.fatal("ice-failed") }
+        initialFailureTimeout = timeout
+        mainHandler.postDelayed(timeout, INITIAL_TRICKLE_GRACE_MILLIS)
+    }
+
+    private fun cancelInitialFailureTimeout() {
+        initialFailureTimeout?.let(mainHandler::removeCallbacks)
+        initialFailureTimeout = null
+    }
+
+    private fun configuration(credentials: TurnCredentials): PeerConnection.RTCConfiguration {
+        val urls =
+            androidTurnUrls(credentials.urls).let { configured ->
+                if (BuildConfig.DEBUG_ICE_RELAY_ONLY)
+                    configured.filter { it.startsWith("turn:") && "transport=udp" in it }
+                else configured
+            }
+        check(urls.isNotEmpty()) { "No compatible ICE server URL" }
+        val servers = urls.map { url ->
+            val builder = PeerConnection.IceServer.builder(url)
+            if (url.startsWith("turn:") || url.startsWith("turns:")) {
+                builder
+                    .setUsername(credentials.androidUsername)
+                    .setPassword(credentials.androidCredential)
+            }
+            builder.createIceServer()
+        }
+        return PeerConnection.RTCConfiguration(servers).also {
+            if (BuildConfig.DEBUG_ICE_RELAY_ONLY)
+                it.iceTransportsType = PeerConnection.IceTransportsType.RELAY
+        }
     }
 
     private fun androidTurnUrls(urls: List<String>): List<String> {
-        if (!isEmulator()) return urls
-        val configuredHost =
-            "turn.${DeviceIdentity(context).baseHost() ?: BuildConfig.PLATFORM_HOST}"
-        // Android Emulator loopback points at the emulator itself. 10.0.2.2 is its host alias.
-        // Use UDP relay transport. A pair of TCP relay candidates is passive on both sides and
-        // cannot establish a media path, whereas UDP is NATed correctly to the host alias.
-        return urls
-            .filter { it.startsWith("turn:") && it.contains("transport=udp") }
-            .map { it.replace(configuredHost, "10.0.2.2") }
+        val alias = BuildConfig.DEBUG_TURN_HOST_ALIAS
+        if (!BuildConfig.DEBUG || alias.isBlank()) return urls
+        return urls.map { url ->
+            if (url.startsWith("turn:") || url.startsWith("turns:")) replaceTurnHost(url, alias)
+            else url
+        }
     }
 
-    private fun candidateType(sdp: String): String =
-        Regex("\\btyp ([a-z]+)").find(sdp)?.groupValues?.getOrNull(1) ?: "unknown"
-
-    /** Diagnostic only: deliberately excludes the candidate address, port and credentials. */
+    /** Diagnostic only: excludes candidate addresses, ports, and credentials. */
     private fun candidateSummary(sdp: String): String {
+        val type = Regex("\\btyp ([a-z]+)").find(sdp)?.groupValues?.getOrNull(1) ?: "unknown"
         val transport =
-            Regex("^candidate:\\S+ \\d+ ([A-Za-z]+)").find(sdp)?.groupValues?.getOrNull(1)
-        val tcpType = Regex("\\btcptype ([a-z]+)").find(sdp)?.groupValues?.getOrNull(1)
-        return listOfNotNull(candidateType(sdp), transport?.lowercase(), tcpType).joinToString("/")
+            Regex("^candidate:\\S+ \\d+ ([A-Za-z]+)")
+                .find(sdp)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.lowercase()
+        return listOfNotNull(type, transport).joinToString("/")
     }
 
-    /** Attaches capture tracks to the transceivers created from the browser's remote offer. */
-    private fun configureSenders() {
-        val transceivers = connection.getTransceivers()
-        val video =
-            checkNotNull(
-                transceivers.firstOrNull {
-                    it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO && !it.isStopped
-                }
-            ) {
-                "Remote offer has no video transceiver"
-            }
-        val audio =
-            checkNotNull(
-                transceivers.firstOrNull {
-                    it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO && !it.isStopped
-                }
-            ) {
-                "Remote offer has no audio transceiver"
-            }
+    private open class SdpObserverAdapter : SdpObserver {
+        override fun onCreateSuccess(description: SessionDescription) = Unit
 
-        check(video.setDirection(RtpTransceiver.RtpTransceiverDirection.SEND_ONLY)) {
-            "Video transceiver rejected send-only direction"
-        }
-        check(audio.setDirection(RtpTransceiver.RtpTransceiverDirection.SEND_ONLY)) {
-            "Audio transceiver rejected send-only direction"
-        }
-        check(video.sender.setTrack(videoTrack, false)) { "Video sender rejected track" }
-        check(audio.sender.setTrack(audioTrack, false)) { "Audio sender rejected track" }
-        video.sender.setStreams(listOf("omniand"))
-        audio.sender.setStreams(listOf("omniand"))
+        override fun onSetSuccess() = Unit
 
-        // VP8 is available in both Firefox and the Android software encoder, including AVDs.
-        val vp8 =
-            factory
-                .getRtpSenderCapabilities(MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO)
-                .codecs
-                .filter { it.name.equals("VP8", ignoreCase = true) }
-        if (vp8.isNotEmpty()) video.setCodecPreferences(vp8)
-    }
+        override fun onCreateFailure(error: String) = Unit
 
-    private fun isEmulator(): Boolean =
-        Build.FINGERPRINT.startsWith("generic") ||
-            Build.FINGERPRINT.contains("/emu") ||
-            Build.MODEL.contains("Emulator", ignoreCase = true) ||
-            Build.PRODUCT.contains("sdk_gphone", ignoreCase = true) ||
-            Build.DEVICE.startsWith("emu") ||
-            Build.HARDWARE.contains("ranchu", ignoreCase = true)
-
-    @Synchronized
-    private fun startCapture() {
-        if (captureStarted) return
-        captureStarted = true
-        runCatching { capturer.startCapture(1280, 720, 30) }
-            .onFailure {
-                captureStarted = false
-                fail("camera-start-failed")
-            }
+        override fun onSetFailure(error: String) = Unit
     }
 
     private companion object {
         const val TAG = "OmniAndCamera"
-        const val MAX_SDP = 200 * 1024
-        const val MAX_CANDIDATE = 8 * 1024
+        const val MAX_WIDTH = 1280
+        const val MAX_HEIGHT = 720
+        const val MAX_FPS = 30
+        const val MAX_VIDEO_BITRATE = 4_000_000
+        const val DISCONNECTED_GRACE_MILLIS = 15_000L
+        const val NEGOTIATION_TIMEOUT_MILLIS = 30_000L
+        const val INITIAL_TRICKLE_GRACE_MILLIS = 5_000L
     }
+}
+
+internal fun replaceTurnHost(url: String, host: String): String {
+    val hostStart = url.indexOf(':') + 1
+    if (hostStart <= 0 || host.isBlank()) return url
+    val hostEnd =
+        url.indexOfAny(charArrayOf(':', '/', '?'), startIndex = hostStart).let {
+            if (it == -1) url.length else it
+        }
+    return url.replaceRange(hostStart, hostEnd, host)
 }

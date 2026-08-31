@@ -19,6 +19,7 @@ import android.provider.Settings
 import androidx.core.content.ContextCompat
 import dev.omniand.hub.MainActivity
 import dev.omniand.hub.R
+import dev.omniand.hub.camera.CameraSessionManager
 import dev.omniand.hub.pairing.DeviceIdentity
 import dev.omniand.hub.server.PlatformServer
 import dev.omniand.hub.tunnel.RelayTunnelClient
@@ -62,6 +63,7 @@ object BackgroundHostingManager {
             BackgroundHostingPreferenceTransition.DISABLE,
             BackgroundHostingPreferenceTransition.KEEP_DISABLED -> {
                 PresenceTracker.releaseWakeLock()
+                CameraSessionManager.instance(context).stop()
                 context.stopService(Intent(context, BackgroundHostingService::class.java))
             }
         }

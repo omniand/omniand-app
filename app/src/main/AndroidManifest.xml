@@ -88,6 +88,7 @@
             android:name=".background.NotificationSetupActivity"
             android:exported="false" />
         <activity android:name=".camera.CameraApprovalActivity" android:exported="false" />
+        <activity android:name=".camera.CameraSetupActivity" android:exported="false" />
         <activity
             android:name=".sms.SmsSendToActivity"
             android:exported="true">

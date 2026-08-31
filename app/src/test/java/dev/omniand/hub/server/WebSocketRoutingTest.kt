@@ -70,6 +70,47 @@ class WebSocketRoutingTest {
     }
 
     @Test
+    fun `camera signaling is desktop only exact origin and capability gated`() {
+        val camera = WebApp("camera", "Camera", "0.2.0", setOf("camera.stream"))
+        val desktop =
+            PlatformRequestContext(
+                "camera-link.example.test",
+                "camera-link.example.test",
+                PlatformRequestContext.Transport.DESKTOP_HTTP,
+                false,
+                camera,
+            )
+        assertEquals(
+            WebSocketAccess.ALLOWED,
+            KtorServer.authorizeCameraWebSocket(
+                desktop,
+                "https://camera-link.example.test",
+                true,
+            ),
+        )
+        assertEquals(
+            WebSocketAccess.FORBIDDEN,
+            KtorServer.authorizeCameraWebSocket(desktop, "https://wrong.example.test", true),
+        )
+        assertEquals(
+            WebSocketAccess.FORBIDDEN,
+            KtorServer.authorizeCameraWebSocket(desktop, "https://camera-link.example.test", false),
+        )
+        assertEquals(
+            WebSocketAccess.FORBIDDEN,
+            KtorServer.authorizeCameraWebSocket(
+                desktop.copy(transport = PlatformRequestContext.Transport.LOOPBACK_HTTP),
+                "https://camera-link.example.test",
+                true,
+            ),
+        )
+        assertEquals(
+            WebSocketAccess.UNAUTHORIZED,
+            KtorServer.authorizeCameraWebSocket(null, null, false),
+        )
+    }
+
+    @Test
     fun rejectsTheUpgradeBeforeOpeningAWebSocket() = testApplication {
         application {
             KtorServer.run {

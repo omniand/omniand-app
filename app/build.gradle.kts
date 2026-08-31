@@ -38,6 +38,19 @@ val debugCaCertificate =
     providers
         .gradleProperty("omniandDebugCaCert")
         .orElse(providers.environmentVariable("OMNIAND_DEBUG_CA_CERT"))
+val debugTurnHostAlias =
+    providers
+        .gradleProperty("omniandDebugTurnHostAlias")
+        .orElse(providers.environmentVariable("OMNIAND_DEBUG_TURN_HOST_ALIAS"))
+        .orElse("")
+        .get()
+val debugIceRelayOnly =
+    providers
+        .gradleProperty("omniandDebugIceRelayOnly")
+        .orElse(providers.environmentVariable("OMNIAND_DEBUG_ICE_RELAY_ONLY"))
+        .orElse("false")
+        .map(String::toBooleanStrict)
+        .get()
 val debugNetworkSecurityResources =
     layout.buildDirectory.dir("generated/debugNetworkSecurityResources")
 val generateDebugNetworkSecurityResources by tasks.registering {
@@ -142,8 +155,18 @@ android {
     buildFeatures { buildConfig = true }
 
     buildTypes {
+        debug {
+            buildConfigField(
+                "String",
+                "DEBUG_TURN_HOST_ALIAS",
+                "\"${debugTurnHostAlias.replace("\"", "\\\"")}\"",
+            )
+            buildConfigField("boolean", "DEBUG_ICE_RELAY_ONLY", "$debugIceRelayOnly")
+        }
         release {
             isMinifyEnabled = false
+            buildConfigField("String", "DEBUG_TURN_HOST_ALIAS", "\"\"")
+            buildConfigField("boolean", "DEBUG_ICE_RELAY_ONLY", "false")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

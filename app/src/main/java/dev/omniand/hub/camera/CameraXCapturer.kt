@@ -1,0 +1,261 @@
+package dev.omniand.hub.camera
+
+import android.content.Context
+import android.os.Looper
+import android.util.Size
+import androidx.camera.core.Camera
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.TorchState
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.LifecycleOwner
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+import org.json.JSONObject
+import org.webrtc.CapturerObserver
+import org.webrtc.JavaI420Buffer
+import org.webrtc.VideoFrame
+
+/** CameraX ImageAnalysis source feeding bounded 720p30 I420 frames into WebRTC. */
+class CameraXCapturer(
+    private val context: Context,
+    private val lifecycleOwner: LifecycleOwner,
+    private val observer: CapturerObserver,
+    private val onState: (CameraHardwareState) -> Unit,
+    private val onFailure: (String) -> Unit,
+) {
+    private val closed = AtomicBoolean(false)
+    private val observerLock = Any()
+    private val analysisExecutor = Executors.newSingleThreadExecutor()
+    private var provider: ProcessCameraProvider? = null
+    private var camera: Camera? = null
+    private var analysis: ImageAnalysis? = null
+    private var selected = CameraFacing.BACK
+    private var lastFrameTimestamp = 0L
+
+    fun start() {
+        val future = ProcessCameraProvider.getInstance(context)
+        future.addListener(
+            {
+                runCatching {
+                        if (closed.get()) return@addListener
+                        provider = future.get()
+                        bind(selected)
+                        synchronized(observerLock) {
+                            if (!closed.get()) observer.onCapturerStarted(true)
+                        }
+                    }
+                    .onFailure {
+                        if (!closed.get()) {
+                            synchronized(observerLock) { observer.onCapturerStarted(false) }
+                            onFailure("camera-start-failed")
+                        }
+                    }
+            },
+            ContextCompat.getMainExecutor(context),
+        )
+    }
+
+    fun switchCamera(facing: CameraFacing): String? {
+        if (closed.get()) return "camera-closed"
+        val available = facingAvailable(facing)
+        if (!available) return "camera-unavailable"
+        if (facing == selected) return null
+        return runCatching {
+                bind(facing)
+                null
+            }
+            .getOrElse { "camera-switch-failed" }
+    }
+
+    fun setTorch(enabled: Boolean): String? {
+        val current = camera ?: return "camera-not-ready"
+        if (!current.cameraInfo.hasFlashUnit()) return "torch-unavailable"
+        val operation = current.cameraControl.enableTorch(enabled)
+        operation.addListener(
+            { runCatching(operation::get).onFailure { onFailure("camera-control-failed") } },
+            ContextCompat.getMainExecutor(context),
+        )
+        publishState(optimisticTorch = enabled)
+        return null
+    }
+
+    fun setZoom(ratio: Double): String? {
+        if (!ratio.isFinite()) return "zoom-out-of-range"
+        val current = camera ?: return "camera-not-ready"
+        val zoom = current.cameraInfo.zoomState.value ?: return "camera-not-ready"
+        if (ratio < zoom.minZoomRatio || ratio > zoom.maxZoomRatio) return "zoom-out-of-range"
+        val operation = current.cameraControl.setZoomRatio(ratio.toFloat())
+        operation.addListener(
+            { runCatching(operation::get).onFailure { onFailure("camera-control-failed") } },
+            ContextCompat.getMainExecutor(context),
+        )
+        publishState(ratio.toFloat())
+        return null
+    }
+
+    fun state(): CameraHardwareState = hardwareState()
+
+    fun close() {
+        if (!closed.compareAndSet(false, true)) return
+        val release = {
+            analysis?.clearAnalyzer()
+            analysis = null
+            provider?.unbindAll()
+            provider = null
+            camera = null
+            analysisExecutor.shutdownNow()
+            synchronized(observerLock) { observer.onCapturerStopped() }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) release()
+        else ContextCompat.getMainExecutor(context).execute(release)
+    }
+
+    /** Rebinds only the analysis use case, making the selected lens authoritative. */
+    private fun bind(facing: CameraFacing) {
+        val activeProvider = checkNotNull(provider)
+        val selector = selector(facing)
+        check(activeProvider.hasCamera(selector)) { "Requested camera is unavailable" }
+        val useCase =
+            ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+                .setResolutionSelector(
+                    ResolutionSelector.Builder()
+                        .setResolutionStrategy(
+                            ResolutionStrategy(
+                                Size(MAX_WIDTH, MAX_HEIGHT),
+                                ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER,
+                            )
+                        )
+                        .build()
+                )
+                .build()
+        useCase.setAnalyzer(analysisExecutor) { image ->
+            try {
+                if (closed.get()) return@setAnalyzer
+                val timestamp = image.imageInfo.timestamp
+                if (timestamp - lastFrameTimestamp < MIN_FRAME_INTERVAL_NS) return@setAnalyzer
+                lastFrameTimestamp = timestamp
+                val crop = image.cropRect
+                val planes = image.planes
+                if (planes.size != 3) error("Unexpected YUV plane count")
+                val converted =
+                    Yuv420Converter.convert(
+                        image.width,
+                        image.height,
+                        crop.left,
+                        crop.top,
+                        crop.width() and -2,
+                        crop.height() and -2,
+                        image.imageInfo.rotationDegrees,
+                        planes[0].toPlane(),
+                        planes[1].toPlane(),
+                        planes[2].toPlane(),
+                    )
+                val buffer = JavaI420Buffer.allocate(converted.width, converted.height)
+                buffer.dataY.put(converted.y).rewind()
+                buffer.dataU.put(converted.u).rewind()
+                buffer.dataV.put(converted.v).rewind()
+                val frame = VideoFrame(buffer, 0, timestamp)
+                synchronized(observerLock) {
+                    if (!closed.get()) observer.onFrameCaptured(frame)
+                }
+                frame.release()
+            } catch (error: Exception) {
+                if (!closed.get()) onFailure("camera-frame-failed")
+            } finally {
+                image.close()
+            }
+        }
+        analysis?.clearAnalyzer()
+        activeProvider.unbindAll()
+        camera = activeProvider.bindToLifecycle(lifecycleOwner, selector, useCase)
+        analysis = useCase
+        selected = facing
+        publishState()
+    }
+
+    private fun androidx.camera.core.ImageProxy.PlaneProxy.toPlane() =
+        YuvPlane(Yuv420Converter.bytes(buffer), rowStride, pixelStride)
+
+    private fun publishState(
+        optimisticZoom: Float? = null,
+        optimisticTorch: Boolean? = null,
+    ) = onState(hardwareState(optimisticZoom, optimisticTorch))
+
+    private fun hardwareState(
+        optimisticZoom: Float? = null,
+        optimisticTorch: Boolean? = null,
+    ): CameraHardwareState {
+        val info = camera?.cameraInfo
+        val zoom = info?.zoomState?.value
+        return CameraHardwareState(
+            front = facingAvailable(CameraFacing.FRONT),
+            back = facingAvailable(CameraFacing.BACK),
+            torch = info?.hasFlashUnit() == true,
+            torchEnabled = optimisticTorch ?: (info?.torchState?.value == TorchState.ON),
+            minZoom = zoom?.minZoomRatio ?: 1f,
+            maxZoom = zoom?.maxZoomRatio ?: 1f,
+            zoom = optimisticZoom ?: zoom?.zoomRatio ?: 1f,
+            camera = selected,
+        )
+    }
+
+    private fun facingAvailable(facing: CameraFacing): Boolean =
+        runCatching { provider?.hasCamera(selector(facing)) == true }.getOrDefault(false)
+
+    private fun selector(facing: CameraFacing) =
+        if (facing == CameraFacing.FRONT) CameraSelector.DEFAULT_FRONT_CAMERA
+        else CameraSelector.DEFAULT_BACK_CAMERA
+
+    private companion object {
+        const val MAX_WIDTH = 1280
+        const val MAX_HEIGHT = 720
+        const val MIN_FRAME_INTERVAL_NS = 1_000_000_000L / 30
+    }
+}
+
+enum class CameraFacing(val wireName: String) {
+    FRONT("front"),
+    BACK("back");
+
+    companion object {
+        fun fromWireName(value: String): CameraFacing? = entries.firstOrNull {
+            it.wireName == value
+        }
+    }
+}
+
+data class CameraHardwareState(
+    val front: Boolean,
+    val back: Boolean,
+    val torch: Boolean,
+    val torchEnabled: Boolean,
+    val minZoom: Float,
+    val maxZoom: Float,
+    val zoom: Float,
+    val camera: CameraFacing,
+) {
+    fun toJson(microphone: Boolean): JSONObject =
+        JSONObject()
+            .put("version", 1)
+            .put("type", "camera-state")
+            .put("state", "streaming")
+            .put("camera", camera.wireName)
+            .put("microphone", microphone)
+            .put(
+                "hardware",
+                JSONObject()
+                    .put("front", front)
+                    .put("back", back)
+                    .put("torch", torch)
+                    .put("torchEnabled", torchEnabled)
+                    .put("minZoom", minZoom.toDouble())
+                    .put("maxZoom", maxZoom.toDouble())
+                    .put("zoom", zoom.toDouble()),
+            )
+}

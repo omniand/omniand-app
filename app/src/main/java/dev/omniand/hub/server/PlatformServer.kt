@@ -303,6 +303,8 @@ object PlatformServer {
             } else
                 remoteLinksResponse {
                     RemoteLinksClient(context).revoke(id)
+                    if (CameraSessionManager.instance(context).activePublicLinkId() == id)
+                        CameraSessionManager.instance(context).stop()
                     JSONObject().put("revoked", true)
                 }
         }

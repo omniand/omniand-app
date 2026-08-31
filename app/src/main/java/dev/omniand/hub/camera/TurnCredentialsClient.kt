@@ -13,7 +13,7 @@ import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 data class TurnCredentials(
@@ -22,25 +22,26 @@ data class TurnCredentials(
     val androidCredential: String,
     val browserUsername: String,
     val browserCredential: String,
+    val expiresAtMillis: Long,
 )
 
 /** Retrieves one non-persistent, link-bound pair of TURN credentials from the Relay. */
 class TurnCredentialsClient(private val context: Context) {
-    fun issue(publicLinkId: String): TurnCredentials {
-        val identity = DeviceIdentity(context)
-        val origin = identity.connectOrigin() ?: error("Relay enrollment is required")
-        val credential = identity.credential() ?: error("Relay enrollment is required")
-        val client =
-            HttpClient(OkHttp) {
-                engine { config { dns(OmniAndDns) } }
-                install(HttpTimeout) {
-                    requestTimeoutMillis = TIMEOUT
-                    connectTimeoutMillis = TIMEOUT
-                    socketTimeoutMillis = TIMEOUT
+    suspend fun issue(publicLinkId: String): TurnCredentials =
+        withContext(Dispatchers.IO) {
+            val identity = DeviceIdentity(context)
+            val origin = identity.connectOrigin() ?: error("Relay enrollment is required")
+            val credential = identity.credential() ?: error("Relay enrollment is required")
+            val client =
+                HttpClient(OkHttp) {
+                    engine { config { dns(OmniAndDns) } }
+                    install(HttpTimeout) {
+                        requestTimeoutMillis = TIMEOUT
+                        connectTimeoutMillis = TIMEOUT
+                        socketTimeoutMillis = TIMEOUT
+                    }
                 }
-            }
-        return try {
-            runBlocking(Dispatchers.IO) {
+            try {
                 val response =
                     client.post("$origin/api/device/turn-credentials") {
                         header("Authorization", "Bearer $credential")
@@ -61,12 +62,12 @@ class TurnCredentialsClient(private val context: Context) {
                     android.getString("credential"),
                     browser.getString("username"),
                     browser.getString("credential"),
+                    value.getLong("expiresAt") * 1000,
                 )
+            } finally {
+                client.close()
             }
-        } finally {
-            client.close()
         }
-    }
 
     private companion object {
         const val TIMEOUT = 8_000L

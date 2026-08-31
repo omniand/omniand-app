@@ -11,6 +11,7 @@ import dev.omniand.hub.BuildConfig
 import dev.omniand.hub.background.BackgroundHostingManager
 import dev.omniand.hub.background.NotificationSetupActivity
 import dev.omniand.hub.background.PresenceTracker
+import dev.omniand.hub.camera.CameraSetupActivity
 import dev.omniand.hub.contacts.ContactsSetupManager
 import dev.omniand.hub.media.MediaSetupManager
 import dev.omniand.hub.pairing.ConnectComputerActivity
@@ -27,6 +28,7 @@ object HubSettingsManager {
             "sms",
             "contacts",
             "media",
+            "camera",
             "notifications",
             "wrapper-installation",
             "background-hosting",
@@ -50,6 +52,15 @@ object HubSettingsManager {
             .put("sms", SmsSetupManager.state(context))
             .put("contacts", ContactsSetupManager.state(context))
             .put("media", MediaSetupManager.state(context))
+            .put(
+                "camera",
+                JSONObject()
+                    .put("cameraPermission", granted(context, Manifest.permission.CAMERA))
+                    .put(
+                        "microphonePermission",
+                        granted(context, Manifest.permission.RECORD_AUDIO),
+                    ),
+            )
             .put(
                 "notifications",
                 JSONObject()
@@ -95,6 +106,11 @@ object HubSettingsManager {
             "contacts" ->
                 ContactsSetupManager.request(context, setOf("contacts.read", "contacts.write"))
             "media" -> MediaSetupManager.request(context, setOf("media.read", "media.write"))
+            "camera" ->
+                context.startActivity(
+                    Intent(context, CameraSetupActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
             "notifications" ->
                 context.startActivity(
                     Intent(context, NotificationSetupActivity::class.java)

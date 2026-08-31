@@ -11,6 +11,7 @@ class HubSettingsManagerTest {
                 "sms",
                 "contacts",
                 "media",
+                "camera",
                 "notifications",
                 "wrapper-installation",
                 "background-hosting",

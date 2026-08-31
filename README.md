@@ -167,8 +167,16 @@ streams remain deferred.
 
 ## Camera streaming (Phase 8)
 
-The Camera catalog app requests a paired desktop view through a desktop-only signaling WebSocket.
-The phone exposes pending requests only to its local Camera origin; approval is explicit, expires
-after 60 seconds, and starts a separate camera/microphone foreground service with a persistent Stop
-notification. It is never restored from boot and is independent from background hosting. WebRTC
-media is intended to use direct ICE or Relay-issued coturn credentials, never the v1 TCP tunnel.
+The Camera 0.2.1 catalog app requests a paired desktop view through a desktop-only, versioned and
+bounded signaling WebSocket. The phone exposes pending requests only to its local Camera origin;
+approval is explicit, notification-first, expires after 60 seconds, and starts a separate
+camera/microphone foreground service with a persistent Stop action. The service is never restored
+from boot and tears down capture, media, timers and signaling on every terminal path.
+
+CameraX owns `ImageAnalysis` capture with keep-latest backpressure, a 1280×720/30 fps ceiling and
+stride/crop/rotation-aware I420 conversion. WebRTC attaches audio/video to the transceivers created
+by the browser offer, reports actual camera/torch/zoom/microphone capabilities, and validates every
+remote control without stopping a healthy stream for a rejected control. TURN credentials are
+opaque, link-owned and renewable; renewal reconfigures the existing peer and performs make-before-
+break ICE restart. Direct ICE remains preferred outside the explicit debug emulator relay profile,
+and media never enters v1 tunnel DATA frames.
