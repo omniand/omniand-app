@@ -6,6 +6,7 @@ import android.util.Log
 import dev.omniand.hub.BuildConfig
 import dev.omniand.hub.background.BackgroundHostingManager
 import dev.omniand.hub.background.PresenceTracker
+import dev.omniand.hub.camera.CameraSessionManager
 import dev.omniand.hub.contacts.ContactsEventBroadcaster
 import dev.omniand.hub.contacts.ContactsSetupManager
 import dev.omniand.hub.files.FilesEventBroadcaster
@@ -221,6 +222,40 @@ object PlatformServer {
         val host = request.hostname
         val isLocalWebView = request.phoneClient
         val isLocalPlatformHome = canManageHub(request)
+        if (path == "/api/camera/requests" && method == "GET") {
+            if (
+                !isLocalWebView ||
+                    app?.id != "camera" ||
+                    !PermissionManager.hasCapability(context, app?.id, "camera.stream")
+            )
+                return codedError(403, "phone-local-required", "Camera decisions are phone-local")
+            return json(
+                200,
+                CameraSessionManager.instance(context).pendingRequest()
+                    ?: JSONObject().put("request", JSONObject.NULL),
+            )
+        }
+        val cameraDecision = Regex("^/api/camera/requests/([^/]+)/decision$").matchEntire(path)
+        if (cameraDecision != null && method == "POST") {
+            if (
+                !isLocalWebView ||
+                    app?.id != "camera" ||
+                    !PermissionManager.hasCapability(context, app?.id, "camera.stream")
+            )
+                return codedError(403, "phone-local-required", "Camera decisions are phone-local")
+            val approved = requireJson(headers, body).requiredBoolean("approved")
+            return if (
+                CameraSessionManager.instance(context)
+                    .decide(cameraDecision.groupValues[1], approved)
+            )
+                json(200, JSONObject().put("accepted", true))
+            else
+                codedError(
+                    404,
+                    "request-not-found",
+                    "Camera request expired or was already handled",
+                )
+        }
         if (path == "/api/hub/settings" && method == "GET") {
             if (!isLocalPlatformHome)
                 return codedError(403, "phone-local-required", "Hub settings are phone-local")

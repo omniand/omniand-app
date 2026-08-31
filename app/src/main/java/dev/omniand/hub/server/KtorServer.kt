@@ -1,6 +1,7 @@
 package dev.omniand.hub.server
 
 import android.content.Context
+import dev.omniand.hub.camera.CameraSessionManager
 import dev.omniand.hub.media.MediaUploadStore
 import dev.omniand.hub.services.FilesService
 import dev.omniand.hub.sms.MmsUploadStore
@@ -65,7 +66,7 @@ object KtorServer {
         install(WebSockets) {
             pingPeriodMillis = 15.seconds.inWholeMilliseconds
             timeoutMillis = 10.seconds.inWholeMilliseconds
-            maxFrameSize = TEST_WEBSOCKET_MAX_FRAME_SIZE
+            maxFrameSize = CAMERA_WEBSOCKET_MAX_FRAME_SIZE
             masking = false
         }
         routing {
@@ -75,6 +76,7 @@ object KtorServer {
             smsRoutes(context)
             applicationRoutes(context)
             hubRoutes(context)
+            cameraRoutes(context)
             testRoutes(websocketAccess, websocketTickPeriod)
             route("/{remaining...}") { get { call.staticOrNotFound(context) } }
         }
@@ -116,6 +118,10 @@ object KtorServer {
                     break
                 }
                 val text = frame.readText()
+                if (text.toByteArray().size > TEST_WEBSOCKET_MAX_FRAME_SIZE) {
+                    close(CloseReason(CloseReason.Codes.TOO_BIG, "Probe is too large"))
+                    break
+                }
                 val probe = runCatching { JSONObject(text) }.getOrNull()
                 if (
                     probe == null ||
@@ -268,6 +274,94 @@ object KtorServer {
             delete("/remote-links/{id}") { call.forward(context) }
             post("/permissions/{group}/request") { call.forward(context) }
             get("/presence") { call.forward(context) }
+        }
+    }
+
+    /** Camera signaling remains a normal authenticated WebSocket and never carries media bytes. */
+    private fun Route.cameraRoutes(context: Context) {
+        route("/api/camera/webrtc") {
+            install(TestWebSocketAuthorization) {
+                authorize = { authorizeCameraWebSocket(context) }
+            }
+            webSocket {
+                val manager = CameraSessionManager.instance(context)
+                val viewer = manager.openViewer(call.request.headers["User-Agent"].orEmpty())
+                val receiver = launch {
+                    try {
+                        for (frame in incoming) {
+                            if (frame !is Frame.Text) {
+                                close(
+                                    CloseReason(
+                                        CloseReason.Codes.CANNOT_ACCEPT,
+                                        "Camera signaling requires JSON text",
+                                    )
+                                )
+                                break
+                            }
+                            val message = frame.readText()
+                            if (message.toByteArray().size > CAMERA_WEBSOCKET_MAX_FRAME_SIZE) {
+                                close(
+                                    CloseReason(
+                                        CloseReason.Codes.TOO_BIG,
+                                        "Camera signal is too large",
+                                    )
+                                )
+                                break
+                            }
+                            val signal = runCatching { JSONObject(message) }.getOrNull()
+                            if (
+                                signal == null ||
+                                    signal.optInt("version", -1) != 1 ||
+                                    signal.optString("type").isBlank()
+                            ) {
+                                close(
+                                    CloseReason(
+                                        CloseReason.Codes.NOT_CONSISTENT,
+                                        "Invalid camera signal",
+                                    )
+                                )
+                                break
+                            }
+                            manager.signal(viewer.id, signal)
+                        }
+                    } finally {
+                        manager.disconnect(viewer.id)
+                    }
+                }
+                try {
+                    for (event in viewer.events) send(Frame.Text(event))
+                } finally {
+                    receiver.cancel()
+                    manager.disconnect(viewer.id)
+                }
+            }
+        }
+        route("/api/camera") {
+            get("/requests") { call.forward(context) }
+            post("/requests/{id}/decision") { call.forward(context) }
+        }
+    }
+
+    private fun ApplicationCall.authorizeCameraWebSocket(context: Context): WebSocketAccess {
+        val requestContext =
+            PlatformServer.authenticateRequest(
+                context,
+                request.headers["Host"].orEmpty(),
+                request.local.remoteAddress,
+                "GET",
+                "/api/camera/webrtc",
+                request.platformHeaders(),
+            )
+        return when {
+            requestContext == null -> WebSocketAccess.UNAUTHORIZED
+            requestContext.transport != PlatformRequestContext.Transport.DESKTOP_HTTP ->
+                WebSocketAccess.FORBIDDEN
+            requestContext.app?.id != "camera" ||
+                !PlatformServer.hasCapability(context, requestContext, "camera.stream") ->
+                WebSocketAccess.FORBIDDEN
+            request.headers["Origin"] != "https://${requestContext.hostname}" ->
+                WebSocketAccess.FORBIDDEN
+            else -> WebSocketAccess.ALLOWED
         }
     }
 
@@ -546,4 +640,5 @@ object KtorServer {
     private const val TEST_APP_ID = "test"
     private const val TEST_WEBSOCKET_MAX_PROBE_ID = 200
     private const val TEST_WEBSOCKET_MAX_FRAME_SIZE = 4L * 1024
+    private const val CAMERA_WEBSOCKET_MAX_FRAME_SIZE = 256L * 1024
 }

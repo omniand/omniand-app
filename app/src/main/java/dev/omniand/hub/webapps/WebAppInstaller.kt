@@ -28,6 +28,7 @@ object WebAppInstaller {
             "media.write",
             "files.read",
             "files.write",
+            "camera.stream",
         )
 
     data class Installed(

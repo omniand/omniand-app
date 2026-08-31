@@ -181,6 +181,7 @@ dependencies {
     implementation("androidx.camera:camera-camera2:1.4.2")
     implementation("androidx.camera:camera-lifecycle:1.4.2")
     implementation("androidx.camera:camera-view:1.4.2")
+    implementation("io.github.webrtc-sdk:android:144.7559.14")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
     implementation("com.android.tools.build:apksig:8.7.3")

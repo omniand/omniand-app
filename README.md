@@ -31,7 +31,7 @@ existing loopback HTTP server. The relay authorizes a bounded first header block
 bytes and `Host` through the byte-transparent tunnel.
 
 The relay-owned `connect.<base>` portal creates a short-lived QR request. Settings launches a native
-CameraX/ML Kit scanner; a first scan atomically enrolls the phone and links the browser, while later
+ CameraX/ML Kit scanner; a first scan atomically enrolls the phone and links the browser, while later
 scans use the encrypted existing device credential. Persistent browser/link records keep one stable
 public link ID across restarts. The portal installs separate Secure, HttpOnly, SameSite=Lax host-only
 sessions through one-minute single-use tickets. Phone-only setup and package-management operations
@@ -164,3 +164,11 @@ Generated wrappers are signed, but downloaded Web packages are not yet cryptogra
 There is no embedded LAN TLS; keep port 8080 on a trusted development network only. The external
 Connected-browser management, revocation, and immediate termination of already active revoked
 streams remain deferred.
+
+## Camera streaming (Phase 8)
+
+The Camera catalog app requests a paired desktop view through a desktop-only signaling WebSocket.
+The phone exposes pending requests only to its local Camera origin; approval is explicit, expires
+after 60 seconds, and starts a separate camera/microphone foreground service with a persistent Stop
+notification. It is never restored from boot and is independent from background hosting. WebRTC
+media is intended to use direct ICE or Relay-issued coturn credentials, never the v1 TCP tunnel.

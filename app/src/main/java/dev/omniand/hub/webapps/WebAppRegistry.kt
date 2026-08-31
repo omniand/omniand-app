@@ -36,6 +36,7 @@ object WebAppRegistry {
             "media.write",
             "files.read",
             "files.write",
+            "camera.stream",
         )
     @Volatile private var cached: List<WebApp>? = null
 

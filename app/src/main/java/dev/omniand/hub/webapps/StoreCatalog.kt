@@ -110,6 +110,7 @@ object StoreCatalog {
             "media.write",
             "files.read",
             "files.write",
+            "camera.stream",
         )
 
     fun fetch(catalogUrl: String = BuildConfig.CATALOG_URL): List<CatalogApp> {
