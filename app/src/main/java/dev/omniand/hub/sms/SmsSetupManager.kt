@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Telephony
+import dev.omniand.hub.settings.PendingSetup
 import dev.omniand.hub.wrappers.WrapperInstaller
 import org.json.JSONObject
 
@@ -34,9 +35,8 @@ object SmsSetupManager {
     }
 
     fun openPendingSetup(activity: Activity) {
-        if (activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(PENDING, false)) {
-            activity.startActivity(Intent(activity, SmsSetupActivity::class.java))
-        }
+        if (!PendingSetup.consume(activity, PREFS, PENDING)) return
+        activity.startActivity(Intent(activity, SmsSetupActivity::class.java))
     }
 
     fun capabilities(context: Context): Set<String> =

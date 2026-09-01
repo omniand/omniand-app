@@ -14,6 +14,7 @@ object CameraSignalValidator {
             "offer" -> validateOffer(value)
             "ice-candidate" -> validateCandidate(value.optJSONObject("candidate"))
             "control" -> validateControlShape(value)
+            "capture-photo" -> validateCapture(value)
             "stop" -> if (onlyKeys(value, "version", "type")) null else "invalid-stop"
             else -> "invalid-type"
         }
@@ -42,14 +43,21 @@ object CameraSignalValidator {
     }
 
     private fun validateControlShape(value: JSONObject): String? {
-        if (!onlyKeys(value, "version", "type", "camera", "torch", "zoom", "microphone"))
+        if (!onlyKeys(value, "version", "type", "camera", "torch", "zoom", "flashMode"))
             return "invalid-control"
         if (value.length() <= 2) return "invalid-control"
         if (value.has("camera") && value.opt("camera") !is String) return "invalid-control"
         if (value.has("torch") && value.opt("torch") !is Boolean) return "invalid-control"
         if (value.has("zoom") && value.opt("zoom") !is Number) return "invalid-control"
-        if (value.has("microphone") && value.opt("microphone") !is Boolean) return "invalid-control"
+        if (value.has("flashMode") && value.optString("flashMode") !in setOf("off", "auto", "on"))
+            return "invalid-control"
         return null
+    }
+
+    private fun validateCapture(value: JSONObject): String? {
+        if (!onlyKeys(value, "version", "type", "requestId")) return "invalid-capture"
+        val id = value.opt("requestId") as? String ?: return "invalid-capture"
+        return if (id.matches(Regex("[A-Za-z0-9_-]{1,64}"))) null else "invalid-capture"
     }
 
     private fun onlyKeys(value: JSONObject, vararg allowed: String): Boolean {

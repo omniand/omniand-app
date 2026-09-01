@@ -25,19 +25,6 @@ fun WebApp.displayName(languageTags: String?): String =
 /** Discovers catalog applications exclusively from trusted, installed wrapper APKs. */
 object WebAppRegistry {
     private val validId = Regex("[a-z][a-z0-9-]{0,31}")
-    private val knownCapabilities =
-        setOf(
-            "sms.read",
-            "sms.send",
-            "sms.modify",
-            "contacts.read",
-            "contacts.write",
-            "media.read",
-            "media.write",
-            "files.read",
-            "files.write",
-            "camera.stream",
-        )
     @Volatile private var cached: List<WebApp>? = null
 
     fun apps(context: Context): List<WebApp> {
@@ -121,7 +108,7 @@ object WebAppRegistry {
                             manifest.optJSONArray("permissions")?.let { values ->
                                 for (index in 0 until values.length()) {
                                     val capability = values.getString(index)
-                                    check(capability in knownCapabilities)
+                                    check(capability in WebCapabilities.known)
                                     add(capability)
                                 }
                             }

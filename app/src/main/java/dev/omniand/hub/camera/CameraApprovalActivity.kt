@@ -21,7 +21,9 @@ class CameraApprovalActivity : Activity() {
         requestId = request.getJSONObject("request").getString("id")
         AlertDialog.Builder(this)
             .setTitle("Share camera?")
-            .setMessage("A paired computer is requesting your camera and microphone.")
+            .setMessage(
+                "A paired device may preview your camera and take photos until it disconnects."
+            )
             .setNegativeButton("Deny") { _, _ -> decide(false) }
             .setPositiveButton("Approve") { _, _ -> requestPermissionsIfNeeded() }
             .setOnCancelListener { decide(false) }
@@ -39,15 +41,11 @@ class CameraApprovalActivity : Activity() {
     }
 
     private fun requestPermissionsIfNeeded() {
-        if (
-            checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED &&
-                checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
-                    PackageManager.PERMISSION_GRANTED
-        )
+        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
             decide(true)
         else
             requestPermissions(
-                arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO),
+                arrayOf(Manifest.permission.CAMERA),
                 REQUEST_PERMISSIONS,
             )
     }

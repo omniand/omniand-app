@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import dev.omniand.hub.settings.PendingSetup
 import org.json.JSONObject
 
 object ContactsSetupManager {
@@ -32,8 +33,7 @@ object ContactsSetupManager {
     }
 
     fun openPendingSetup(activity: Activity): Boolean {
-        if (!activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(PENDING, false))
-            return false
+        if (!PendingSetup.consume(activity, PREFS, PENDING)) return false
         activity.startActivity(Intent(activity, ContactsSetupActivity::class.java))
         return true
     }

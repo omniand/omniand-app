@@ -99,19 +99,6 @@ object StoreCatalog {
     internal const val MAX_CATALOG_BYTES = 256 * 1024
     internal const val MAX_ICON_BYTES = 512 * 1024
     private val validId = Regex("[a-z][a-z0-9-]{0,31}")
-    private val knownCapabilities =
-        setOf(
-            "sms.read",
-            "sms.send",
-            "sms.modify",
-            "contacts.read",
-            "contacts.write",
-            "media.read",
-            "media.write",
-            "files.read",
-            "files.write",
-            "camera.stream",
-        )
 
     fun fetch(catalogUrl: String = BuildConfig.CATALOG_URL): List<CatalogApp> {
         val bytes =
@@ -175,7 +162,7 @@ object StoreCatalog {
                 val declared = buildSet {
                     for (permissionIndex in 0 until permissions.length()) {
                         val permission = permissions.getString(permissionIndex)
-                        check(permission in knownCapabilities) { "Unknown capability" }
+                        check(permission in WebCapabilities.known) { "Unknown capability" }
                         check(add(permission)) { "Duplicate capability" }
                     }
                 }

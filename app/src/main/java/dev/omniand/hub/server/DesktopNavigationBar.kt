@@ -17,7 +17,7 @@ object DesktopNavigationBar {
         return "//$platformAuthority/"
     }
 
-    fun inject(document: ByteArray, appName: String, platformOrigin: String): ByteArray {
+    fun inject(document: ByteArray, platformOrigin: String): ByteArray {
         val html = document.toString(Charsets.UTF_8)
         val headEnd = Regex("</head\\s*>", RegexOption.IGNORE_CASE).find(html)
         val documentWithFavicon =
@@ -31,7 +31,7 @@ object DesktopNavigationBar {
             Regex("<body(?:\\s[^>]*)?>", RegexOption.IGNORE_CASE).find(documentWithFavicon)
                 ?: return document
         val insertionPoint = bodyStart.range.last + 1
-        val bar = markup(escape(appName), escape(platformOrigin))
+        val bar = markup(escape(platformOrigin))
         return documentWithFavicon
             .substring(0, insertionPoint)
             .plus(bar)
@@ -42,15 +42,16 @@ object DesktopNavigationBar {
     /**
      * Builds isolated, dependency-free chrome that remains usable when application scripts fail.
      */
-    private fun markup(appName: String, platformOrigin: String) =
+    private fun markup(platformOrigin: String) =
         """
         <style id="omniand-desktop-navigation-style">
-          body { padding-top: 56px !important; }
           .omniand-desktop-navigation {
-            position: fixed; z-index: 2147483647; top: 0; right: 0; left: 0;
-            display: flex; box-sizing: border-box; height: 56px; padding: 0 16px;
-            align-items: center; gap: 12px; color: #1f1f1f; background: #f7f5fa;
-            box-shadow: 0 2px 6px rgb(0 0 0 / 18%); font: 18px sans-serif;
+            position: fixed; z-index: 2147483647; top: 50%; left: max(8px, env(safe-area-inset-left));
+            transform: translateY(-50%); display: flex; box-sizing: border-box; width: 48px;
+            max-height: calc(100dvh - 16px); padding: 8px 4px; flex-direction: column;
+            align-items: center; gap: 8px; color: #1f1f1f; background: #f7f5fa;
+            border: 1px solid rgb(0 0 0 / 12%); border-radius: 24px;
+            box-shadow: 0 3px 12px rgb(0 0 0 / 24%); font: 16px sans-serif;
           }
           .omniand-desktop-navigation a,
           .omniand-desktop-navigation button {
@@ -65,14 +66,17 @@ object DesktopNavigationBar {
             background: rgb(0 0 0 / 8%); outline: none;
           }
           .omniand-desktop-navigation svg { width: 22px; height: 22px; fill: currentColor; }
-          .omniand-desktop-navigation span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .omniand-desktop-navigation [data-omniand-drag] {
+            height: 24px; cursor: grab; touch-action: none; color: #666; font-size: 18px;
+          }
+          .omniand-desktop-navigation [data-omniand-drag]:active { cursor: grabbing; }
         </style>
         <nav class="omniand-desktop-navigation" aria-label="Platform navigation">
-          <button type="button" data-omniand-back data-home="$platformOrigin" aria-label="Back" title="Back">&#8592;</button>
           <a href="$platformOrigin" aria-label="Home" title="Home">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.5 11h2.3v9h5.4v-5.5h3.6V20h5.4v-9h2.3L12 3Z"/></svg>
           </a>
-          <span>$appName</span>
+          <button type="button" data-omniand-back data-home="$platformOrigin" aria-label="Back" title="Back">&#8592;</button>
+          <button type="button" data-omniand-drag aria-label="Move navigation" title="Move navigation">&#8942;</button>
         </nav>
         <script src="$SCRIPT_PATH" defer></script>
         """
@@ -84,6 +88,8 @@ object DesktopNavigationBar {
         (() => {
           window.__omniandPresence ||= new EventSource('/api/hub/presence');
           const back = document.querySelector('[data-omniand-back]');
+          const navigation = document.querySelector('.omniand-desktop-navigation');
+          const drag = document.querySelector('[data-omniand-drag]');
           if (!back) return;
           back.addEventListener('click', () => {
             const overlay = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')]
@@ -99,6 +105,55 @@ object DesktopNavigationBar {
             }
             if (history.length > 1) history.back();
             else location.assign(back.dataset.home);
+          });
+          if (!navigation || !drag) return;
+          let offsetX = 0;
+          let offsetY = 0;
+          const positionKey = 'omniand_navigation_position';
+          const clamp = (value, minimum, maximum) => Math.min(Math.max(value, minimum), maximum);
+          const place = (left, top) => {
+            navigation.style.transform = 'none';
+            navigation.style.left = `${'$'}{clamp(left, 8, Math.max(8, innerWidth - navigation.offsetWidth - 8))}px`;
+            navigation.style.top = `${'$'}{clamp(top, 8, Math.max(8, innerHeight - navigation.offsetHeight - 8))}px`;
+          };
+          const readPosition = () => {
+            const cookie = document.cookie.split('; ').find((item) => item.startsWith(positionKey + '='));
+            const stored = cookie?.substring(positionKey.length + 1)
+              || window.name.match(/(?:^|;)omniand-navigation=([0-9]+,[0-9]+)(?:;|$)/)?.[1];
+            const [left, top] = (stored || '').split(',').map(Number);
+            return Number.isFinite(left) && Number.isFinite(top) ? { left, top } : null;
+          };
+          const savePosition = () => {
+            const bounds = navigation.getBoundingClientRect();
+            const value = `${'$'}{Math.round(bounds.left)},${'$'}{Math.round(bounds.top)}`;
+            const parentDomain = location.hostname.includes('.')
+              ? location.hostname.substring(location.hostname.indexOf('.') + 1) : '';
+            document.cookie = positionKey + '=' + value + '; Max-Age=31536000; Path=/; SameSite=Lax'
+              + (parentDomain ? '; Domain=' + parentDomain : '')
+              + (location.protocol === 'https:' ? '; Secure' : '');
+            const token = 'omniand-navigation=' + value;
+            window.name = window.name.replace(/(?:^|;)omniand-navigation=[0-9]+,[0-9]+(?=;|$)/, '')
+              .replace(/^;+|;+$/g, '');
+            window.name = window.name ? window.name + ';' + token : token;
+          };
+          requestAnimationFrame(() => {
+            const saved = readPosition();
+            if (saved) place(saved.left, saved.top);
+          });
+          drag.addEventListener('pointerdown', (event) => {
+            const bounds = navigation.getBoundingClientRect();
+            offsetX = event.clientX - bounds.left;
+            offsetY = event.clientY - bounds.top;
+            drag.setPointerCapture(event.pointerId);
+          });
+          drag.addEventListener('pointermove', (event) => {
+            if (!drag.hasPointerCapture(event.pointerId)) return;
+            place(event.clientX - offsetX, event.clientY - offsetY);
+          });
+          drag.addEventListener('pointerup', savePosition);
+          addEventListener('resize', () => {
+            const bounds = navigation.getBoundingClientRect();
+            place(bounds.left, bounds.top);
           });
         })();
         """

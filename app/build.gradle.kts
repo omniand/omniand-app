@@ -5,6 +5,40 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+/**
+ * Loads machine-local Android build values even when Gradle is started outside an activated shell.
+ * Explicit Gradle properties and exported environment variables retain precedence over `.env`.
+ */
+val localEnvironment =
+    rootProject
+        .file(".env")
+        .takeIf(File::isFile)
+        ?.readLines()
+        .orEmpty()
+        .mapNotNull { source ->
+            val line = source.trim().removePrefix("export ").trim()
+            if (line.isEmpty() || line.startsWith('#')) return@mapNotNull null
+            val separator = line.indexOf('=')
+            if (separator <= 0) return@mapNotNull null
+            val name = line.substring(0, separator).trim()
+            if (!name.matches(Regex("[A-Za-z_][A-Za-z0-9_]*"))) return@mapNotNull null
+            val raw = line.substring(separator + 1).trim()
+            val value =
+                if (
+                    raw.length >= 2 &&
+                        ((raw.first() == '"' && raw.last() == '"') ||
+                            (raw.first() == '\'' && raw.last() == '\''))
+                ) {
+                    raw.substring(1, raw.length - 1)
+                } else raw
+            name to value
+        }
+        .toMap()
+
+fun configuredEnvironment(name: String) =
+    localEnvironment[name]?.let { providers.environmentVariable(name).orElse(it) }
+        ?: providers.environmentVariable(name)
+
 val bundleWrapperTemplate by
     tasks.registering(Copy::class) {
         dependsOn(":wrappers:template:assembleDebug")
@@ -24,30 +58,30 @@ val platformShellOutput =
 val platformHost =
     providers
         .gradleProperty("omniandPlatformHost")
-        .orElse(providers.environmentVariable("OMNIAND_PLATFORM_HOST"))
+        .orElse(configuredEnvironment("OMNIAND_PLATFORM_HOST"))
         .orElse("phone.example.org")
         .get()
         .lowercase()
 val relayUrl =
     providers
         .gradleProperty("omniandRelayUrl")
-        .orElse(providers.environmentVariable("OMNIAND_RELAY_URL"))
+        .orElse(configuredEnvironment("OMNIAND_RELAY_URL"))
         .orElse("wss://relay.$platformHost/_omniand/tunnel/v1")
         .get()
 val debugCaCertificate =
     providers
         .gradleProperty("omniandDebugCaCert")
-        .orElse(providers.environmentVariable("OMNIAND_DEBUG_CA_CERT"))
+        .orElse(configuredEnvironment("OMNIAND_DEBUG_CA_CERT"))
 val debugTurnHostAlias =
     providers
         .gradleProperty("omniandDebugTurnHostAlias")
-        .orElse(providers.environmentVariable("OMNIAND_DEBUG_TURN_HOST_ALIAS"))
+        .orElse(configuredEnvironment("OMNIAND_DEBUG_TURN_HOST_ALIAS"))
         .orElse("")
         .get()
 val debugIceRelayOnly =
     providers
         .gradleProperty("omniandDebugIceRelayOnly")
-        .orElse(providers.environmentVariable("OMNIAND_DEBUG_ICE_RELAY_ONLY"))
+        .orElse(configuredEnvironment("OMNIAND_DEBUG_ICE_RELAY_ONLY"))
         .orElse("false")
         .map(String::toBooleanStrict)
         .get()

@@ -18,6 +18,7 @@ import dev.omniand.hub.R
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -31,6 +32,7 @@ class CameraStreamingService : Service(), LifecycleOwner {
         get() = registry
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var peerJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -41,18 +43,22 @@ class CameraStreamingService : Service(), LifecycleOwner {
             .createNotificationChannel(
                 NotificationChannel(CHANNEL, "Camera streaming", NotificationManager.IMPORTANCE_LOW)
             )
-        startForeground(ID, notification())
-        scope.launch { startPeer() }
+        try {
+            startForeground(ID, notification())
+        } catch (error: SecurityException) {
+            Log.w(TAG, "camera foreground start rejected", error)
+            CameraSessionManager.instance(this).fatal("camera-background-start")
+            stopSelf()
+            return
+        }
+        peerJob = scope.launch { startPeer() }
         scope.launch { monitorPermissions() }
     }
 
     private suspend fun monitorPermissions() {
         while (scope.isActive) {
             if (
-                checkSelfPermission(Manifest.permission.CAMERA) !=
-                    PackageManager.PERMISSION_GRANTED ||
-                    checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
-                        PackageManager.PERMISSION_GRANTED
+                checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED
             ) {
                 CameraSessionManager.instance(this).fatal("permission-revoked")
                 stopSelf()
@@ -66,6 +72,13 @@ class CameraStreamingService : Service(), LifecycleOwner {
         val manager = CameraSessionManager.instance(this)
         try {
             val publicLinkId = checkNotNull(manager.activePublicLinkId())
+            if (publicLinkId.isEmpty()) {
+                val direct = TurnCredentials(emptyList(), "", "", "", "", Long.MAX_VALUE)
+                val peer = CameraWebRtcPeer(this, this, manager, direct)
+                manager.attach(peer, direct)
+                while (scope.isActive) delay(PERMISSION_CHECK_MILLIS)
+                return
+            }
             var issuedAt = System.currentTimeMillis()
             var credentials = TurnCredentialsClient(this).issue(publicLinkId)
             Log.i(TAG, "TURN credentials issued")
@@ -113,6 +126,9 @@ class CameraStreamingService : Service(), LifecycleOwner {
         if (intent?.action == STOP) {
             CameraSessionManager.instance(this).stop()
             stopSelf()
+        } else if (intent?.action == RESTART) {
+            peerJob?.cancel()
+            peerJob = scope.launch { startPeer() }
         }
         return START_NOT_STICKY
     }
@@ -146,18 +162,19 @@ class CameraStreamingService : Service(), LifecycleOwner {
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_hub_foreground)
             .setContentTitle("Camera is streaming")
-            .setContentText("A paired computer can view your camera and microphone.")
+            .setContentText("A paired device can preview the camera and take photos.")
             .setContentIntent(open)
             .setOngoing(true)
             .addAction(Notification.Action.Builder(null, "Stop", stop).build())
             .build()
     }
 
-    private companion object {
+    companion object {
         private const val TAG = "OmniAndCamera"
         private const val CHANNEL = "camera-streaming"
         private const val ID = 7402
         private const val STOP = "dev.omniand.hub.STOP_CAMERA"
+        internal const val RESTART = "dev.omniand.hub.RESTART_CAMERA"
         private const val RENEW_RETRY_MILLIS = 30_000L
         private const val PERMISSION_CHECK_MILLIS = 1_000L
     }

@@ -54,12 +54,7 @@ object HubSettingsManager {
             .put("media", MediaSetupManager.state(context))
             .put(
                 "camera",
-                JSONObject()
-                    .put("cameraPermission", granted(context, Manifest.permission.CAMERA))
-                    .put(
-                        "microphonePermission",
-                        granted(context, Manifest.permission.RECORD_AUDIO),
-                    ),
+                JSONObject().put("cameraPermission", granted(context, Manifest.permission.CAMERA)),
             )
             .put(
                 "notifications",

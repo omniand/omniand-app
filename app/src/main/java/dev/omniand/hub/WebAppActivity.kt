@@ -9,6 +9,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import dev.omniand.hub.camera.CameraSessionManager
 import dev.omniand.hub.pairing.DeviceIdentity
 import dev.omniand.hub.sms.SmsNotifications
 import dev.omniand.hub.webapps.WebAppRegistry
@@ -18,10 +19,11 @@ import java.util.Locale
 class WebAppActivity : Activity() {
     private lateinit var webView: WebView
     private var fileResult: ValueCallback<Array<Uri>>? = null
+    private var appId: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val appId = intent.getStringExtra(EXTRA_APP_ID)
+        appId = intent.getStringExtra(EXTRA_APP_ID)
         val app = WebAppRegistry.apps(this).firstOrNull { it.id == appId }
         if (app == null) {
             finish()
@@ -80,14 +82,16 @@ class WebAppActivity : Activity() {
                             }
                             if (
                                 uri.scheme == "https" &&
-                                    uri.host ==
-                                        "messages.${DeviceIdentity(applicationContext).baseHost() ?: BuildConfig.PLATFORM_HOST}"
+                                    uri.host in
+                                        setOf("messages", "gallery").map {
+                                            "$it.${DeviceIdentity(applicationContext).baseHost() ?: BuildConfig.PLATFORM_HOST}"
+                                        }
                             ) {
                                 val route = uri.fragment?.let { "#$it" }.orEmpty()
                                 if (validRoute(route))
                                     startActivity(
                                         Intent(this@WebAppActivity, WebAppActivity::class.java)
-                                            .putExtra(EXTRA_APP_ID, "messages")
+                                            .putExtra(EXTRA_APP_ID, uri.host?.substringBefore('.'))
                                             .putExtra(EXTRA_ROUTE, route)
                                     )
                                 return true
@@ -108,9 +112,11 @@ class WebAppActivity : Activity() {
                                         }
                                     }
                             if (targetApp != null) {
+                                val route = uri.fragment?.let { "#$it" }.orEmpty()
                                 startActivity(
                                     Intent(this@WebAppActivity, WebAppActivity::class.java)
                                         .putExtra(EXTRA_APP_ID, targetApp.id)
+                                        .putExtra(EXTRA_ROUTE, route.takeIf(::validRoute))
                                 )
                             } else {
                                 runCatching { startActivity(Intent(Intent.ACTION_VIEW, uri)) }
@@ -134,6 +140,7 @@ class WebAppActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (::webView.isInitialized) {
+            webView.onResume()
             webView.post {
                 webView.evaluateJavascript(
                     "window.dispatchEvent(new Event('omniand:resume'))",
@@ -141,6 +148,12 @@ class WebAppActivity : Activity() {
                 )
             }
         }
+    }
+
+    override fun onPause() {
+        if (appId == "camera") CameraSessionManager.instance(this).stopLocal()
+        if (::webView.isInitialized) webView.onPause()
+        super.onPause()
     }
 
     override fun onDestroy() {
@@ -166,7 +179,9 @@ class WebAppActivity : Activity() {
 
         fun validRoute(route: String): Boolean =
             route.matches(
-                Regex("^#/(thread\\?id=[0-9]+|compose\\?to=[^#&]{0,100}(&body=[^#]{0,2000})?)$")
+                Regex(
+                    "^#/(thread\\?id=[0-9]+|compose\\?to=[^#&]{0,100}(&body=[^#]{0,2000})?|media\\?id=[A-Za-z0-9_=-]{1,512})$"
+                )
             )
     }
 }

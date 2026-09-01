@@ -1,0 +1,7 @@
+[env]
+# Shared emulator defaults. Existing shell values and `.env` may override them.
+OMNIAND_PLATFORM_HOST = { default = "dev.omniand.net" }
+OMNIAND_RELAY_URL = { default = "ws://10.0.2.2:18082/_omniand/tunnel/v1" }
+OMNIAND_DEBUG_TURN_HOST_ALIAS = { default = "10.0.2.2" }
+OMNIAND_DEBUG_ICE_RELAY_ONLY = { default = "true" }
+_.file = { path = ".env", redact = true }

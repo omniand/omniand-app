@@ -4,14 +4,11 @@ import android.Manifest
 import android.app.Activity
 import android.os.Bundle
 
-/** Visible phone-local setup flow for Camera and microphone runtime permissions. */
+/** Visible phone-local setup flow for the Camera runtime permission. */
 class CameraSetupActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        requestPermissions(
-            arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO),
-            REQUEST_CODE,
-        )
+        requestPermissions(arrayOf(Manifest.permission.CAMERA), REQUEST_CODE)
     }
 
     override fun onRequestPermissionsResult(

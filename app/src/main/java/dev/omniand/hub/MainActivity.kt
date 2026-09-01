@@ -60,8 +60,6 @@ class MainActivity : Activity() {
             }
         setContentView(webView)
         LocalWebViewBootstrap.load(this, webView, "localhost")
-
-        openPendingSetup()
     }
 
     @Deprecated("Deprecated in Java")

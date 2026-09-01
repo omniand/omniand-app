@@ -10,6 +10,8 @@ import android.view.Surface
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.TorchState
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
@@ -37,6 +39,7 @@ class CameraXCapturer(
     private var provider: ProcessCameraProvider? = null
     private var camera: Camera? = null
     private var analysis: ImageAnalysis? = null
+    private var imageCapture: ImageCapture? = null
     private var selected = CameraFacing.BACK
     private var lastFrameTimestamp = 0L
     private var targetRotation = Surface.ROTATION_0
@@ -49,6 +52,7 @@ class CameraXCapturer(
                     if (closed.get() || targetRotation == rotation) return@execute
                     targetRotation = rotation
                     analysis?.targetRotation = rotation
+                    imageCapture?.targetRotation = rotation
                 }
             }
         }
@@ -116,6 +120,37 @@ class CameraXCapturer(
         return null
     }
 
+    fun setFlashMode(mode: String): String? {
+        val capture = imageCapture ?: return "camera-not-ready"
+        if (camera?.cameraInfo?.hasFlashUnit() != true) return "flash-unavailable"
+        capture.flashMode =
+            when (mode) {
+                "off" -> ImageCapture.FLASH_MODE_OFF
+                "auto" -> ImageCapture.FLASH_MODE_AUTO
+                "on" -> ImageCapture.FLASH_MODE_ON
+                else -> return "invalid-control"
+            }
+        publishState()
+        return null
+    }
+
+    /** Writes one maximum-quality, rotation-aware JPEG to bounded app cache. */
+    fun capture(file: java.io.File, complete: (Result<java.io.File>) -> Unit): String? {
+        val useCase = imageCapture ?: return "camera-not-ready"
+        val options = ImageCapture.OutputFileOptions.Builder(file).build()
+        useCase.takePicture(
+            options,
+            analysisExecutor,
+            object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(result: ImageCapture.OutputFileResults) =
+                    complete(Result.success(file))
+
+                override fun onError(error: ImageCaptureException) = complete(Result.failure(error))
+            },
+        )
+        return null
+    }
+
     fun state(): CameraHardwareState = hardwareState()
 
     fun close() {
@@ -124,6 +159,7 @@ class CameraXCapturer(
             orientationListener.disable()
             analysis?.clearAnalyzer()
             analysis = null
+            imageCapture = null
             provider?.unbindAll()
             provider = null
             camera = null
@@ -134,7 +170,7 @@ class CameraXCapturer(
         else ContextCompat.getMainExecutor(context).execute(release)
     }
 
-    /** Rebinds only the analysis use case, making the selected lens authoritative. */
+    /** Rebinds preview analysis and still capture to the same authoritative lens. */
     private fun bind(facing: CameraFacing) {
         val activeProvider = checkNotNull(provider)
         val selector = selector(facing)
@@ -192,10 +228,17 @@ class CameraXCapturer(
                 image.close()
             }
         }
+        val stills =
+            ImageCapture.Builder()
+                .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                .setTargetRotation(targetRotation)
+                .setFlashMode(ImageCapture.FLASH_MODE_OFF)
+                .build()
         analysis?.clearAnalyzer()
         activeProvider.unbindAll()
-        camera = activeProvider.bindToLifecycle(lifecycleOwner, selector, useCase)
+        camera = activeProvider.bindToLifecycle(lifecycleOwner, selector, useCase, stills)
         analysis = useCase
+        imageCapture = stills
         selected = facing
         publishState()
     }
@@ -219,6 +262,13 @@ class CameraXCapturer(
             front = facingAvailable(CameraFacing.FRONT),
             back = facingAvailable(CameraFacing.BACK),
             torch = info?.hasFlashUnit() == true,
+            flash = info?.hasFlashUnit() == true,
+            flashMode =
+                when (imageCapture?.flashMode) {
+                    ImageCapture.FLASH_MODE_AUTO -> "auto"
+                    ImageCapture.FLASH_MODE_ON -> "on"
+                    else -> "off"
+                },
             torchEnabled = optimisticTorch ?: (info?.torchState?.value == TorchState.ON),
             minZoom = if (zoomReliable) zoom?.minZoomRatio ?: 1f else 1f,
             maxZoom = if (zoomReliable) zoom?.maxZoomRatio ?: 1f else 1f,
@@ -271,25 +321,29 @@ data class CameraHardwareState(
     val front: Boolean,
     val back: Boolean,
     val torch: Boolean,
+    val flash: Boolean,
+    val flashMode: String,
     val torchEnabled: Boolean,
     val minZoom: Float,
     val maxZoom: Float,
     val zoom: Float,
     val camera: CameraFacing,
 ) {
-    fun toJson(microphone: Boolean): JSONObject =
+    fun toJson(): JSONObject =
         JSONObject()
             .put("version", 1)
             .put("type", "camera-state")
             .put("state", "streaming")
             .put("camera", camera.wireName)
-            .put("microphone", microphone)
             .put(
                 "hardware",
                 JSONObject()
                     .put("front", front)
                     .put("back", back)
                     .put("torch", torch)
+                    .put("flash", flash)
+                    .put("flashMode", flashMode)
+                    .put("capture", true)
                     .put("torchEnabled", torchEnabled)
                     .put("minZoom", minZoom.toDouble())
                     .put("maxZoom", maxZoom.toDouble())

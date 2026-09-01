@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.provider.Settings
+import dev.omniand.hub.settings.PendingSetup
 import org.json.JSONObject
 
 /** Owns phone-local runtime and special-access setup for MediaStore capabilities. */
@@ -20,24 +21,36 @@ object MediaSetupManager {
     private const val CAPABILITIES = "capabilities"
 
     fun recordPending(context: Context, capabilities: Set<String>) {
-        context
-            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val existing = preferences.getStringSet(CAPABILITIES, emptySet()).orEmpty()
+        val requested = capabilities.filterTo(mutableSetOf()) { it.startsWith("media.") }
+        if (requested.isEmpty()) return
+        val added = newMediaCapabilities(existing, requested)
+        preferences
             .edit()
-            .putBoolean(PENDING, true)
-            .putStringSet(CAPABILITIES, capabilities)
+            .putStringSet(CAPABILITIES, existing + requested)
+            .also { if (added.isNotEmpty()) it.putBoolean(PENDING, true) }
             .apply()
     }
 
     fun request(context: Context, capabilities: Set<String>) {
-        recordPending(context, capabilities)
+        val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val requested = capabilities.filterTo(mutableSetOf()) { it.startsWith("media.") }
+        preferences
+            .edit()
+            .putBoolean(PENDING, true)
+            .putStringSet(
+                CAPABILITIES,
+                preferences.getStringSet(CAPABILITIES, emptySet()).orEmpty() + requested,
+            )
+            .apply()
         context.startActivity(
             Intent(context, MediaSetupActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
     }
 
     fun openPendingSetup(activity: Activity): Boolean {
-        if (!activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(PENDING, false))
-            return false
+        if (!PendingSetup.consume(activity, PREFS, PENDING)) return false
         activity.startActivity(Intent(activity, MediaSetupActivity::class.java))
         return true
     }
@@ -97,6 +110,9 @@ object MediaSetupManager {
     private fun granted(context: Context, permission: String) =
         context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
 }
+
+internal fun newMediaCapabilities(existing: Set<String>, requested: Set<String>): Set<String> =
+    requested.filterTo(mutableSetOf()) { it.startsWith("media.") && it !in existing }
 
 /** Presents Android-controlled media permission and management screens only on the phone. */
 class MediaSetupActivity : Activity() {

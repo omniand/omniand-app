@@ -31,7 +31,6 @@ class DesktopNavigationBarTest {
             DesktopNavigationBar.inject(
                     "<!doctype html><head><title>Messages</title></head><body class=\"app\"><main>Messages</main></body>"
                         .toByteArray(),
-                    "Messages",
                     "https://phone.example.org/",
                 )
                 .toString(Charsets.UTF_8)
@@ -42,9 +41,18 @@ class DesktopNavigationBarTest {
         assertTrue(result.contains("<body class=\"app\"><style"))
         assertTrue(result.contains("href=\"https://phone.example.org/\""))
         assertTrue(result.contains("data-omniand-back"))
+        assertTrue(result.contains("data-omniand-drag"))
+        assertTrue(result.contains("position: fixed"))
+        assertTrue(result.contains("top: 50%"))
+        assertTrue(result.contains("flex-direction: column"))
+        assertTrue(!result.contains("body { padding-top"))
         assertTrue(result.contains("aria-label=\"Home\""))
+        assertTrue(result.indexOf("aria-label=\"Home\"") < result.indexOf("aria-label=\"Back\""))
+        assertTrue(
+            result.indexOf("aria-label=\"Back\"") < result.indexOf("aria-label=\"Move navigation\"")
+        )
         assertTrue(result.contains("src=\"${DesktopNavigationBar.SCRIPT_PATH}\""))
-        assertTrue(result.contains("<span>Messages</span>"))
+        assertTrue(!result.contains("<span>Messages</span>"))
     }
 
     @Test
@@ -55,6 +63,11 @@ class DesktopNavigationBarTest {
         assertTrue(script.contains("key: 'Escape'"))
         assertTrue(script.contains("history.back()"))
         assertTrue(script.contains("location.assign(back.dataset.home)"))
+        assertTrue(script.contains("setPointerCapture"))
+        assertTrue(script.contains("omniand_navigation_position"))
+        assertTrue(script.contains("document.cookie"))
+        assertTrue(script.contains("window.name"))
+        assertTrue(script.contains("pointerup', savePosition"))
     }
 
     @Test
@@ -62,12 +75,10 @@ class DesktopNavigationBarTest {
         val result =
             DesktopNavigationBar.inject(
                     "<body></body>".toByteArray(),
-                    "Chat <unsafe>",
                     "https://phone.example.org/?a=1&b=2",
                 )
                 .toString(Charsets.UTF_8)
 
-        assertTrue(result.contains("Chat &lt;unsafe&gt;"))
         assertTrue(result.contains("?a=1&amp;b=2"))
     }
 
@@ -77,7 +88,7 @@ class DesktopNavigationBarTest {
 
         assertArrayEquals(
             document,
-            DesktopNavigationBar.inject(document, "Messages", "https://phone.example.org/"),
+            DesktopNavigationBar.inject(document, "https://phone.example.org/"),
         )
     }
 }

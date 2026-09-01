@@ -17,19 +17,6 @@ object WebAppInstaller {
     private const val MAX_ENTRY_BYTES = 2L * 1024 * 1024
     private const val MAX_ENTRIES = 100
     private val validId = Regex("[a-z][a-z0-9-]{0,31}")
-    private val knownCapabilities =
-        setOf(
-            "sms.read",
-            "sms.send",
-            "sms.modify",
-            "contacts.read",
-            "contacts.write",
-            "media.read",
-            "media.write",
-            "files.read",
-            "files.write",
-            "camera.stream",
-        )
 
     data class Installed(
         val id: String,
@@ -92,7 +79,7 @@ object WebAppInstaller {
             if (permissionsJson != null)
                 for (index in 0 until permissionsJson.length()) {
                     val permission = permissionsJson.getString(index)
-                    check(permission in knownCapabilities) { "Unknown capability" }
+                    check(permission in WebCapabilities.known) { "Unknown capability" }
                     declaredPermissions += permission
                 }
             validateExpected(

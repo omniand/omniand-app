@@ -11,6 +11,7 @@ class CameraSessionStateMachine(private val now: () -> Long = System::currentTim
             val publicLinkId: String,
             val viewerName: String,
             val expiresAt: Long,
+            val incumbent: Streaming? = null,
         ) : State
 
         data class Streaming(
@@ -29,15 +30,21 @@ class CameraSessionStateMachine(private val now: () -> Long = System::currentTim
         publicLinkId: String,
         viewerName: String,
         lifetimeMillis: Long,
+        allowLocalTakeover: Boolean = false,
     ): State.PendingApproval? {
         expire()
-        if (state != State.Idle || lifetimeMillis <= 0) return null
+        val incumbent =
+            (state as? State.Streaming)?.takeIf {
+                allowLocalTakeover && it.publicLinkId.isEmpty()
+            }
+        if ((state != State.Idle && incumbent == null) || lifetimeMillis <= 0) return null
         return State.PendingApproval(
                 requestId,
                 viewerId,
                 publicLinkId,
                 viewerName,
                 now() + lifetimeMillis,
+                incumbent,
             )
             .also { state = it }
     }
@@ -49,7 +56,7 @@ class CameraSessionStateMachine(private val now: () -> Long = System::currentTim
         state =
             if (approved)
                 State.Streaming(pending.viewerId, pending.publicLinkId, pending.viewerName)
-            else State.Idle
+            else pending.incumbent ?: State.Idle
         return state
     }
 
@@ -64,11 +71,19 @@ class CameraSessionStateMachine(private val now: () -> Long = System::currentTim
         val activeViewer =
             when (val current = state) {
                 State.Idle -> null
-                is State.PendingApproval -> current.viewerId
+                is State.PendingApproval ->
+                    if (viewerId == current.viewerId) current.viewerId
+                    else current.incumbent?.viewerId
                 is State.Streaming -> current.viewerId
             }
         if (activeViewer != viewerId) return false
-        state = State.Idle
+        state =
+            when (val current = state) {
+                is State.PendingApproval ->
+                    if (viewerId == current.viewerId) current.incumbent ?: State.Idle
+                    else current.copy(incumbent = null)
+                else -> State.Idle
+            }
         return true
     }
 
@@ -78,10 +93,23 @@ class CameraSessionStateMachine(private val now: () -> Long = System::currentTim
         return true
     }
 
+    /** Stops a phone-local stream without interrupting an independently approved remote stream. */
+    fun stopLocal(): Boolean {
+        val hasLocalStream =
+            when (val current = state) {
+                State.Idle -> false
+                is State.Streaming -> current.publicLinkId.isEmpty()
+                is State.PendingApproval -> current.incumbent?.publicLinkId?.isEmpty() == true
+            }
+        if (!hasLocalStream) return false
+        state = State.Idle
+        return true
+    }
+
     fun expire(): State.PendingApproval? {
         val pending = state as? State.PendingApproval ?: return null
         if (pending.expiresAt > now()) return null
-        state = State.Idle
+        state = pending.incumbent ?: State.Idle
         return pending
     }
 }

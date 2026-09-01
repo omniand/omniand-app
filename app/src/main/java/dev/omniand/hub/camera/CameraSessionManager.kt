@@ -25,12 +25,13 @@ import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Coordinates the one-viewer Idle → PendingApproval → Streaming → Idle lifecycle. */
+/** Coordinates one active viewer plus an approved handoff from a local to a remote viewer. */
 class CameraSessionManager private constructor(private val context: Context) {
     private val lock = Any()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val machine = CameraSessionStateMachine()
     private var viewer: Viewer? = null
+    private var pendingViewer: Viewer? = null
     private var peer: CameraWebRtcPeer? = null
     private var expiration: Job? = null
 
@@ -40,7 +41,7 @@ class CameraSessionManager private constructor(private val context: Context) {
         val events: kotlinx.coroutines.channels.Channel<String>,
     )
 
-    fun openViewer(userAgent: String, publicLinkId: String): Viewer {
+    fun openViewer(userAgent: String, publicLinkId: String, local: Boolean = false): Viewer {
         val newViewer =
             Viewer(
                 UUID.randomUUID().toString(),
@@ -57,19 +58,30 @@ class CameraSessionManager private constructor(private val context: Context) {
                         publicLinkId,
                         fallbackViewerName(userAgent),
                         APPROVAL_MILLIS,
+                        allowLocalTakeover = !local,
                     )
                 if (pending == null) {
                     newViewer.events.trySend(signal("busy"))
                     newViewer.events.close()
                     return newViewer
                 }
-                viewer = newViewer
-                newViewer.events.trySend(signal("pending", "requestId" to pending.requestId))
-                scheduleExpirationLocked(pending)
+                if (local) {
+                    viewer = newViewer
+                    machine.decide(pending.requestId, true)
+                    newViewer.events.trySend(signal("ready"))
+                } else {
+                    pendingViewer = newViewer
+                    newViewer.events.trySend(signal("pending", "requestId" to pending.requestId))
+                    scheduleExpirationLocked(pending)
+                }
                 pending
             }
-        showApprovalNotification(request)
-        resolveManagedViewerName(newViewer)
+        if (local)
+            context.startForegroundService(Intent(context, CameraStreamingService::class.java))
+        else {
+            showApprovalNotification(request)
+            resolveManagedViewerName(newViewer)
+        }
         Log.i(TAG, "camera request opened")
         return newViewer
     }
@@ -89,36 +101,97 @@ class CameraSessionManager private constructor(private val context: Context) {
             }
         }
 
+    /** Reports the authoritative phone UI state without exposing signaling details. */
+    fun phoneStatus(): JSONObject =
+        synchronized(lock) {
+            expireLocked()
+            val current = machine.state
+            val request =
+                (current as? CameraSessionStateMachine.State.PendingApproval)?.let {
+                    JSONObject()
+                        .put("id", it.requestId)
+                        .put("viewer", it.viewerName)
+                        .put("expiresAt", it.expiresAt / 1000)
+                }
+            JSONObject()
+                .put("request", request ?: JSONObject.NULL)
+                .put(
+                    "sharing",
+                    current is CameraSessionStateMachine.State.Streaming &&
+                        current.publicLinkId.isNotEmpty(),
+                )
+        }
+
     /** Completes a current visible phone approval; stale IDs fail closed. */
     fun decide(id: String, approved: Boolean): Boolean {
-        val shouldStart =
+        val action =
             synchronized(lock) {
                 expireLocked()
+                val pending =
+                    machine.state as? CameraSessionStateMachine.State.PendingApproval
+                        ?: return false
+                val target = pendingViewer?.takeIf { it.id == pending.viewerId } ?: return false
                 machine.decide(id, approved) ?: return false
                 expiration?.cancel()
                 expiration = null
                 cancelApprovalNotification()
                 if (!approved) {
-                    viewer?.events?.trySend(signal("error", "code" to "denied"))
-                    closeViewerLocked()
-                    false
+                    target.events.trySend(signal("error", "code" to "denied"))
+                    target.events.close()
+                    pendingViewer = null
+                    StartAction.NONE
                 } else {
-                    viewer?.events?.trySend(signal("ready"))
-                    true
+                    if (pending.incumbent != null) {
+                        viewer?.events?.trySend(signal("stopped"))
+                        peer?.close()
+                        peer = null
+                        closeViewerLocked()
+                    }
+                    viewer = target
+                    pendingViewer = null
+                    target.events.trySend(signal("ready"))
+                    if (pending.incumbent != null) StartAction.RESTART else StartAction.START
                 }
             }
-        if (shouldStart)
-            context.startForegroundService(Intent(context, CameraStreamingService::class.java))
+        when (action) {
+            StartAction.NONE -> Unit
+            StartAction.START ->
+                context.startForegroundService(Intent(context, CameraStreamingService::class.java))
+            StartAction.RESTART ->
+                context.startForegroundService(
+                    Intent(context, CameraStreamingService::class.java)
+                        .setAction(CameraStreamingService.RESTART)
+                )
+        }
         return true
     }
 
     fun disconnect(id: String) {
         val shouldStop =
             synchronized(lock) {
+                val pending = machine.state as? CameraSessionStateMachine.State.PendingApproval
                 if (!machine.disconnect(id)) return
                 Log.i(TAG, "camera viewer disconnected")
-                teardownLocked(sendStopped = false)
-                true
+                when {
+                    pendingViewer?.id == id -> {
+                        pendingViewer?.events?.close()
+                        pendingViewer = null
+                        expiration?.cancel()
+                        expiration = null
+                        cancelApprovalNotification()
+                        false
+                    }
+                    pending?.incumbent?.viewerId == id -> {
+                        peer?.close()
+                        peer = null
+                        closeViewerLocked()
+                        true
+                    }
+                    else -> {
+                        teardownLocked(sendStopped = false)
+                        true
+                    }
+                }
             }
         if (shouldStop) context.stopService(Intent(context, CameraStreamingService::class.java))
     }
@@ -128,6 +201,17 @@ class CameraSessionManager private constructor(private val context: Context) {
             synchronized(lock) {
                 val active = machine.stop()
                 teardownLocked(sendStopped = active)
+                active
+            }
+        if (shouldStop) context.stopService(Intent(context, CameraStreamingService::class.java))
+    }
+
+    /** Releases CameraX when the phone-local Camera UI leaves the foreground. */
+    fun stopLocal() {
+        val shouldStop =
+            synchronized(lock) {
+                val active = machine.stopLocal()
+                if (active) teardownLocked(sendStopped = true)
                 active
             }
         if (shouldStop) context.stopService(Intent(context, CameraStreamingService::class.java))
@@ -164,12 +248,13 @@ class CameraSessionManager private constructor(private val context: Context) {
             "offer" -> activePeer.offer(value.getString("sdp"))
             "ice-candidate" -> activePeer.candidate(value.getJSONObject("candidate"))
             "control" -> activePeer.control(value)
+            "capture-photo" -> activePeer.capture(value.getString("requestId"))
         }
     }
 
     fun attach(newPeer: CameraWebRtcPeer, credentials: TurnCredentials) {
         synchronized(lock) {
-            if (machine.state !is CameraSessionStateMachine.State.Streaming) {
+            if (activeStreamingLocked() == null) {
                 newPeer.close()
                 return
             }
@@ -182,8 +267,7 @@ class CameraSessionManager private constructor(private val context: Context) {
 
     fun renew(target: CameraWebRtcPeer, credentials: TurnCredentials): Boolean =
         synchronized(lock) {
-            if (peer !== target || machine.state !is CameraSessionStateMachine.State.Streaming)
-                return false
+            if (peer !== target || activeStreamingLocked() == null) return false
             if (!target.updateIceServers(credentials)) {
                 emitErrorLocked("turn-renewal-failed", fatal = false)
                 return false
@@ -192,12 +276,13 @@ class CameraSessionManager private constructor(private val context: Context) {
             true
         }
 
-    fun activePublicLinkId(): String? =
-        synchronized(lock) {
-            when (val state = machine.state) {
-                is CameraSessionStateMachine.State.Streaming -> state.publicLinkId
-                else -> null
-            }
+    fun activePublicLinkId(): String? = synchronized(lock) { activeStreamingLocked()?.publicLinkId }
+
+    private fun activeStreamingLocked(): CameraSessionStateMachine.State.Streaming? =
+        when (val state = machine.state) {
+            is CameraSessionStateMachine.State.Streaming -> state
+            is CameraSessionStateMachine.State.PendingApproval -> state.incumbent
+            CameraSessionStateMachine.State.Idle -> null
         }
 
     fun emit(message: JSONObject) {
@@ -205,6 +290,32 @@ class CameraSessionManager private constructor(private val context: Context) {
     }
 
     fun emitError(code: String) = synchronized(lock) { emitErrorLocked(code, fatal = false) }
+
+    fun emitCaptureStarted(requestId: String) =
+        emit(
+            JSONObject()
+                .put("version", 1)
+                .put("type", "capture-started")
+                .put("requestId", requestId)
+        )
+
+    fun emitCaptureComplete(requestId: String, item: JSONObject) =
+        emit(
+            JSONObject()
+                .put("version", 1)
+                .put("type", "capture-complete")
+                .put("requestId", requestId)
+                .put("item", item)
+        )
+
+    fun emitCaptureError(requestId: String, code: String) =
+        emit(
+            JSONObject()
+                .put("version", 1)
+                .put("type", "capture-error")
+                .put("requestId", requestId)
+                .put("code", code.take(MAX_ERROR_CODE))
+        )
 
     private fun emitErrorLocked(code: String, fatal: Boolean) {
         viewer
@@ -228,13 +339,7 @@ class CameraSessionManager private constructor(private val context: Context) {
                 .put("expiresAt", credentials.expiresAtMillis / 1000)
                 .put(
                     "iceServers",
-                    JSONArray()
-                        .put(
-                            JSONObject()
-                                .put("urls", JSONArray(credentials.urls))
-                                .put("username", credentials.browserUsername)
-                                .put("credential", credentials.browserCredential)
-                        ),
+                    browserIceServers(credentials),
                 )
         )
     }
@@ -250,8 +355,12 @@ class CameraSessionManager private constructor(private val context: Context) {
     private fun expireLocked() {
         val expired = machine.expire() ?: return
         cancelApprovalNotification()
-        viewer?.events?.trySend(signal("error", "code" to "expired"))
-        teardownLocked(sendStopped = false)
+        pendingViewer?.events?.trySend(signal("error", "code" to "expired"))
+        pendingViewer?.events?.close()
+        pendingViewer = null
+        expiration?.cancel()
+        expiration = null
+        if (expired.incumbent == null) teardownLocked(sendStopped = false)
     }
 
     private fun teardownLocked(sendStopped: Boolean) {
@@ -262,6 +371,8 @@ class CameraSessionManager private constructor(private val context: Context) {
         peer?.close()
         peer = null
         closeViewerLocked()
+        pendingViewer?.events?.close()
+        pendingViewer = null
     }
 
     private fun closeViewerLocked() {
@@ -303,7 +414,7 @@ class CameraSessionManager private constructor(private val context: Context) {
                 channelId = REQUEST_CHANNEL,
                 channelName = "Camera requests",
                 title = "Camera request",
-                text = "${pending.viewerName} wants to use the camera and microphone.",
+                text = "${pending.viewerName} wants to preview the camera and take photos.",
                 timeoutMillis = APPROVAL_MILLIS,
             )
         )
@@ -333,7 +444,9 @@ class CameraSessionManager private constructor(private val context: Context) {
             Notification.Builder(context, REQUEST_CHANNEL)
                 .setSmallIcon(R.drawable.ic_hub_foreground)
                 .setContentTitle("Camera request")
-                .setContentText("${pending.viewerName} wants to use the camera and microphone.")
+                .setContentText(
+                    "${pending.viewerName} wants to preview the camera and take photos."
+                )
                 .setContentIntent(open)
                 .setAutoCancel(true)
                 .setTimeoutAfter(APPROVAL_MILLIS)
@@ -383,4 +496,22 @@ class CameraSessionManager private constructor(private val context: Context) {
                         ?: CameraSessionManager(context.applicationContext).also { singleton = it }
                 }
     }
+
+    private enum class StartAction {
+        NONE,
+        START,
+        RESTART,
+    }
+}
+
+/** Direct local ICE has no server entry; remote sessions expose one bounded TURN entry. */
+internal fun browserIceServers(credentials: TurnCredentials): JSONArray {
+    if (credentials.urls.isEmpty()) return JSONArray()
+    return JSONArray()
+        .put(
+            JSONObject()
+                .put("urls", JSONArray(credentials.urls))
+                .put("username", credentials.browserUsername)
+                .put("credential", credentials.browserCredential)
+        )
 }

@@ -1,12 +1,16 @@
 package dev.omniand.hub.server
 
+import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import dev.omniand.hub.BuildConfig
 import dev.omniand.hub.background.BackgroundHostingManager
 import dev.omniand.hub.background.PresenceTracker
 import dev.omniand.hub.camera.CameraSessionManager
+import dev.omniand.hub.camera.CameraSetupActivity
 import dev.omniand.hub.contacts.ContactsEventBroadcaster
 import dev.omniand.hub.contacts.ContactsSetupManager
 import dev.omniand.hub.files.FilesEventBroadcaster
@@ -222,6 +226,28 @@ object PlatformServer {
         val host = request.hostname
         val isLocalWebView = request.phoneClient
         val isLocalPlatformHome = canManageHub(request)
+        if (path == "/api/camera/setup" && method == "GET") {
+            if (!isLocalWebView || app?.id != "camera")
+                return codedError(403, "phone-local-required", "Camera setup is phone-local")
+            return json(
+                200,
+                JSONObject()
+                    .put(
+                        "cameraPermission",
+                        context.checkSelfPermission(Manifest.permission.CAMERA) ==
+                            PackageManager.PERMISSION_GRANTED,
+                    ),
+            )
+        }
+        if (path == "/api/camera/setup/request" && method == "POST") {
+            if (!isLocalWebView || app?.id != "camera")
+                return codedError(403, "phone-local-required", "Camera setup is phone-local")
+            context.startActivity(
+                Intent(context, CameraSetupActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            return json(200, JSONObject().put("opened", true))
+        }
         if (path == "/api/camera/requests" && method == "GET") {
             if (
                 !isLocalWebView ||
@@ -231,8 +257,7 @@ object PlatformServer {
                 return codedError(403, "phone-local-required", "Camera decisions are phone-local")
             return json(
                 200,
-                CameraSessionManager.instance(context).pendingRequest()
-                    ?: JSONObject().put("request", JSONObject.NULL),
+                CameraSessionManager.instance(context).phoneStatus(),
             )
         }
         val cameraDecision = Regex("^/api/camera/requests/([^/]+)/decision$").matchEntire(path)
@@ -1609,7 +1634,6 @@ object PlatformServer {
         if (!isLocalWebView && app != null && relative.endsWith(".html")) {
             DesktopNavigationBar.inject(
                 bytes,
-                app.displayName(languageTags),
                 DesktopNavigationBar.platformHref(app.id, requestAuthority),
             )
         } else {

@@ -291,24 +291,28 @@ object KtorServer {
                 android.util.Log.i("OmniAndCamera", "camera websocket connected")
                 val manager = CameraSessionManager.instance(context)
                 val baseHost = DeviceIdentity(context).baseHost() ?: BuildConfig.PLATFORM_HOST
+                val requestHost =
+                    call.request.headers["Host"].orEmpty().substringBefore(':').lowercase()
+                val local = requestHost == "camera.localhost"
                 val stableHost =
                     RemoteLinkSession.parseHost(
-                        call.request.headers["Host"].orEmpty().substringBefore(':').lowercase(),
+                        requestHost,
                         baseHost,
                     )
-                        ?: run {
-                            close(
-                                CloseReason(
-                                    CloseReason.Codes.VIOLATED_POLICY,
-                                    "Invalid remote host",
-                                )
-                            )
-                            return@webSocket
-                        }
+                if (!local && stableHost == null) {
+                    close(
+                        CloseReason(
+                            CloseReason.Codes.VIOLATED_POLICY,
+                            "Invalid remote host",
+                        )
+                    )
+                    return@webSocket
+                }
                 val viewer =
                     manager.openViewer(
                         call.request.headers["User-Agent"].orEmpty(),
-                        stableHost.publicLinkId,
+                        stableHost?.publicLinkId.orEmpty(),
+                        local,
                     )
                 val receiver = launch {
                     try {
@@ -369,6 +373,8 @@ object KtorServer {
             }
         }
         route("/api/camera") {
+            get("/setup") { call.forward(context) }
+            post("/setup/request") { call.forward(context) }
             get("/requests") { call.forward(context) }
             post("/requests/{id}/decision") { call.forward(context) }
         }
@@ -388,7 +394,9 @@ object KtorServer {
             requestContext,
             request.headers["Origin"],
             requestContext != null &&
-                PlatformServer.hasCapability(context, requestContext, "camera.stream"),
+                PlatformServer.hasCapability(context, requestContext, "camera.stream") &&
+                PlatformServer.hasCapability(context, requestContext, "camera.capture") &&
+                PlatformServer.hasCapability(context, requestContext, "media.write"),
         )
     }
 
@@ -399,10 +407,11 @@ object KtorServer {
     ): WebSocketAccess {
         return when {
             requestContext == null -> WebSocketAccess.UNAUTHORIZED
-            requestContext.transport != PlatformRequestContext.Transport.DESKTOP_HTTP ->
-                WebSocketAccess.FORBIDDEN
             requestContext.app?.id != "camera" || !hasCapability -> WebSocketAccess.FORBIDDEN
-            origin != "https://${requestContext.hostname}" -> WebSocketAccess.FORBIDDEN
+            requestContext.transport == PlatformRequestContext.Transport.DESKTOP_HTTP &&
+                origin != "https://${requestContext.hostname}" -> WebSocketAccess.FORBIDDEN
+            requestContext.transport == PlatformRequestContext.Transport.LOOPBACK_HTTP &&
+                origin != "http://${requestContext.authority}" -> WebSocketAccess.FORBIDDEN
             else -> WebSocketAccess.ALLOWED
         }
     }

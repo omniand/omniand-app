@@ -6,9 +6,13 @@ import android.os.Looper
 import android.util.Log
 import androidx.lifecycle.LifecycleOwner
 import dev.omniand.hub.BuildConfig
+import dev.omniand.hub.services.MediaService
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONObject
-import org.webrtc.AudioSource
-import org.webrtc.AudioTrack
 import org.webrtc.DefaultVideoDecoderFactory
 import org.webrtc.DefaultVideoEncoderFactory
 import org.webrtc.EglBase
@@ -23,7 +27,7 @@ import org.webrtc.SessionDescription
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 
-/** Owns CameraX, audio, and one reusable native PeerConnection for an approved session. */
+/** Owns CameraX still/preview capture and one reusable native PeerConnection. */
 class CameraWebRtcPeer(
     private val context: Context,
     lifecycleOwner: LifecycleOwner,
@@ -34,13 +38,11 @@ class CameraWebRtcPeer(
     private val factory: PeerConnectionFactory
     private val eglBase: EglBase
     private val videoSource: VideoSource
-    private val audioSource: AudioSource
     private val connection: PeerConnection
     private val videoTrack: VideoTrack
-    private val audioTrack: AudioTrack
     private val capturer: CameraXCapturer
     private var rtcConfiguration = configuration(credentials)
-    private var microphone = true
+    private val photoInFlight = AtomicBoolean(false)
     private var captureStarted = false
     private var closed = false
     private var remoteDescriptionSet = false
@@ -65,21 +67,18 @@ class CameraWebRtcPeer(
                 .createPeerConnectionFactory()
         videoSource = factory.createVideoSource(false)
         videoSource.adaptOutputFormat(MAX_WIDTH, MAX_HEIGHT, MAX_FPS)
-        audioSource = factory.createAudioSource(MediaConstraints())
         connection =
             factory.createPeerConnection(rtcConfiguration, observer())
                 ?: error("PeerConnection unavailable")
         videoTrack = factory.createVideoTrack("camera-video", videoSource)
-        audioTrack = factory.createAudioTrack("camera-audio", audioSource)
         videoTrack.setEnabled(true)
-        audioTrack.setEnabled(true)
         connection.setAudioPlayout(false)
         capturer =
             CameraXCapturer(
                 context,
                 lifecycleOwner,
                 videoSource.capturerObserver,
-                onState = { manager.emit(it.toJson(microphone)) },
+                onState = { manager.emit(it.toJson()) },
                 onFailure = manager::fatal,
             )
     }
@@ -152,12 +151,45 @@ class CameraWebRtcPeer(
                 error = capturer.setTorch(value.getBoolean("torch"))
             if (error == null && value.has("zoom"))
                 error = capturer.setZoom(value.getDouble("zoom"))
-            if (error == null && value.has("microphone")) {
-                microphone = value.getBoolean("microphone")
-                audioTrack.setEnabled(microphone)
-                manager.emit(capturer.state().toJson(microphone))
-            }
+            if (error == null && value.has("flashMode"))
+                error = capturer.setFlashMode(value.getString("flashMode"))
             if (error != null) manager.emitError(error)
+        }
+    }
+
+    /** Captures one correlated JPEG and publishes it into Pictures/OmniAnd. */
+    fun capture(requestId: String) {
+        if (closed || !photoInFlight.compareAndSet(false, true)) {
+            manager.emitCaptureError(requestId, "capture-busy")
+            return
+        }
+        manager.emitCaptureStarted(requestId)
+        val name = SimpleDateFormat("'IMG_'yyyyMMdd_HHmmss_SSS'.jpg'", Locale.US).format(Date())
+        val file = File(context.cacheDir, "camera-$requestId.jpg")
+        file.delete()
+        val startError =
+            capturer.capture(file) { result ->
+                try {
+                    result
+                        .onSuccess {
+                            if (it.length() !in 1..MAX_CAPTURE_BYTES) error("Invalid camera output")
+                            manager.emitCaptureComplete(
+                                requestId,
+                                MediaService(context).publish(it, name, "image/jpeg"),
+                            )
+                        }
+                        .onFailure { manager.emitCaptureError(requestId, "capture-failed") }
+                } catch (_: Exception) {
+                    manager.emitCaptureError(requestId, "capture-failed")
+                } finally {
+                    file.delete()
+                    photoInFlight.set(false)
+                }
+            }
+        if (startError != null) {
+            file.delete()
+            photoInFlight.set(false)
+            manager.emitCaptureError(requestId, startError)
         }
     }
 
@@ -191,9 +223,7 @@ class CameraWebRtcPeer(
         connection.close()
         connection.dispose()
         videoTrack.dispose()
-        audioTrack.dispose()
         videoSource.dispose()
-        audioSource.dispose()
         factory.dispose()
         eglBase.release()
     }
@@ -238,18 +268,9 @@ class CameraWebRtcPeer(
                     it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO && !it.isStopped
                 }
             )
-        val audio =
-            checkNotNull(
-                transceivers.firstOrNull {
-                    it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO && !it.isStopped
-                }
-            )
         check(video.setDirection(RtpTransceiver.RtpTransceiverDirection.SEND_ONLY))
-        check(audio.setDirection(RtpTransceiver.RtpTransceiverDirection.SEND_ONLY))
         check(video.sender.setTrack(videoTrack, false))
-        check(audio.sender.setTrack(audioTrack, false))
         video.sender.setStreams(listOf("omniand"))
-        audio.sender.setStreams(listOf("omniand"))
         val parameters = video.sender.parameters
         parameters.encodings.forEach {
             it.maxFramerate = MAX_FPS
@@ -371,7 +392,8 @@ class CameraWebRtcPeer(
                     configured.filter { it.startsWith("turn:") && "transport=udp" in it }
                 else configured
             }
-        check(urls.isNotEmpty()) { "No compatible ICE server URL" }
+        if (credentials.urls.isNotEmpty())
+            check(urls.isNotEmpty()) { "No compatible ICE server URL" }
         val servers = urls.map { url ->
             val builder = PeerConnection.IceServer.builder(url)
             if (url.startsWith("turn:") || url.startsWith("turns:")) {
@@ -382,7 +404,7 @@ class CameraWebRtcPeer(
             builder.createIceServer()
         }
         return PeerConnection.RTCConfiguration(servers).also {
-            if (BuildConfig.DEBUG_ICE_RELAY_ONLY)
+            if (BuildConfig.DEBUG_ICE_RELAY_ONLY && credentials.urls.isNotEmpty())
                 it.iceTransportsType = PeerConnection.IceTransportsType.RELAY
         }
     }
@@ -424,6 +446,7 @@ class CameraWebRtcPeer(
         const val MAX_HEIGHT = 720
         const val MAX_FPS = 30
         const val MAX_VIDEO_BITRATE = 4_000_000
+        const val MAX_CAPTURE_BYTES = 50L * 1024 * 1024
         const val DISCONNECTED_GRACE_MILLIS = 15_000L
         const val NEGOTIATION_TIMEOUT_MILLIS = 30_000L
         const val INITIAL_TRICKLE_GRACE_MILLIS = 5_000L

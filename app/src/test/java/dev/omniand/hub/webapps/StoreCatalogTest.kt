@@ -39,6 +39,18 @@ class StoreCatalogTest {
     }
 
     @Test
+    fun catalogAcceptsPhotoCameraCapabilities() {
+        val camera =
+            """[{"id":"camera","name":"Camera","tagline":"Take photos","version":"0.3.0","category":"Photo and video","permissions":["camera.stream","camera.capture","media.read","media.write"],"packageUrl":"/packages/camera-0.3.0.zip","iconUrl":"/catalog/icons/camera.png"}]"""
+        assertEquals(
+            setOf("camera.stream", "camera.capture", "media.read", "media.write"),
+            StoreCatalog.parse(camera.toByteArray(), "https://catalog.example/")
+                .single()
+                .permissions,
+        )
+    }
+
+    @Test
     fun catalogRejectsDuplicateIdsUnknownCapabilitiesAndForeignResources() {
         val item = catalog().toString(Charsets.UTF_8).removePrefix("[").removeSuffix("]")
         assertThrows(IllegalStateException::class.java) {

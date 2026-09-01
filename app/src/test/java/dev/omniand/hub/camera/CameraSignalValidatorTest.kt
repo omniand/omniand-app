@@ -15,7 +15,15 @@ class CameraSignalValidatorTest {
         )
         assertNull(
             CameraSignalValidator.error(
-                JSONObject().put("version", 1).put("type", "control").put("microphone", false)
+                JSONObject().put("version", 1).put("type", "control").put("flashMode", "auto")
+            )
+        )
+        assertNull(
+            CameraSignalValidator.error(
+                JSONObject()
+                    .put("version", 1)
+                    .put("type", "capture-photo")
+                    .put("requestId", "shot_1")
             )
         )
         assertEquals(
