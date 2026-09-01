@@ -67,8 +67,9 @@ object DesktopNavigationBar {
           }
           .omniand-desktop-navigation svg { width: 22px; height: 22px; fill: currentColor; }
           .omniand-desktop-navigation [data-omniand-drag] {
-            height: 24px; cursor: grab; touch-action: none; color: #666; font-size: 18px;
+            height: 32px; cursor: grab; touch-action: none; color: #666;
           }
+          .omniand-desktop-navigation [data-omniand-drag] svg { width: 18px; height: 18px; }
           .omniand-desktop-navigation [data-omniand-drag]:active { cursor: grabbing; }
         </style>
         <nav class="omniand-desktop-navigation" aria-label="Platform navigation">
@@ -76,7 +77,13 @@ object DesktopNavigationBar {
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.5 11h2.3v9h5.4v-5.5h3.6V20h5.4v-9h2.3L12 3Z"/></svg>
           </a>
           <button type="button" data-omniand-back data-home="$platformOrigin" aria-label="Back" title="Back">&#8592;</button>
-          <button type="button" data-omniand-drag aria-label="Move navigation" title="Move navigation">&#8942;</button>
+          <button type="button" data-omniand-drag aria-label="Move navigation" title="Move navigation">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/>
+              <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+              <circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/>
+            </svg>
+          </button>
         </nav>
         <script src="$SCRIPT_PATH" defer></script>
         """

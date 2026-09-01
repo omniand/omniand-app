@@ -42,6 +42,8 @@ class DesktopNavigationBarTest {
         assertTrue(result.contains("href=\"https://phone.example.org/\""))
         assertTrue(result.contains("data-omniand-back"))
         assertTrue(result.contains("data-omniand-drag"))
+        assertTrue(result.contains("<circle cx=\"9\" cy=\"6\" r=\"1.5\"/>"))
+        assertTrue(!result.contains("&#8942;"))
         assertTrue(result.contains("position: fixed"))
         assertTrue(result.contains("top: 50%"))
         assertTrue(result.contains("flex-direction: column"))
