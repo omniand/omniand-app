@@ -8,6 +8,7 @@ import android.util.Size
 import android.view.OrientationEventListener
 import android.view.Surface
 import androidx.camera.core.Camera
+import androidx.camera.core.CameraControl
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
@@ -18,6 +19,7 @@ import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONObject
@@ -113,7 +115,11 @@ class CameraXCapturer(
         if (ratio < zoom.minZoomRatio || ratio > zoom.maxZoomRatio) return "zoom-out-of-range"
         val operation = current.cameraControl.setZoomRatio(ratio.toFloat())
         operation.addListener(
-            { runCatching(operation::get).onFailure { onFailure("camera-control-failed") } },
+            {
+                runCatching(operation::get).onFailure {
+                    if (!isSupersededCameraControlFailure(it)) onFailure("camera-control-failed")
+                }
+            },
             ContextCompat.getMainExecutor(context),
         )
         publishState(ratio.toFloat())
@@ -304,6 +310,20 @@ internal fun targetRotationForOrientation(orientation: Int): Int? {
         in 225 until 315 -> Surface.ROTATION_90
         else -> Surface.ROTATION_0
     }
+}
+
+/** CameraX cancels the previous zoom future when a newer slider value supersedes it. */
+internal fun isSupersededCameraControlFailure(error: Throwable): Boolean {
+    var current: Throwable? = error
+    while (current != null) {
+        if (
+            current is CameraControl.OperationCanceledException || current is CancellationException
+        ) {
+            return true
+        }
+        current = current.cause
+    }
+    return false
 }
 
 enum class CameraFacing(val wireName: String) {
