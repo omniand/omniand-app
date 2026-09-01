@@ -1,3 +1,4 @@
+import java.net.URI
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -67,6 +68,12 @@ val relayUrl =
         .gradleProperty("omniandRelayUrl")
         .orElse(configuredEnvironment("OMNIAND_RELAY_URL"))
         .orElse("wss://relay.$platformHost/_omniand/tunnel/v1")
+        .get()
+val catalogUrl =
+    providers
+        .gradleProperty("omniandCatalogUrl")
+        .orElse(configuredEnvironment("OMNIAND_CATALOG_URL"))
+        .orElse("http://192.168.1.11:5173/")
         .get()
 val debugCaCertificate =
     providers
@@ -147,6 +154,21 @@ check(relayUrl.matches(Regex("wss?://[^\\s\\\"]+"))) {
     "omniandRelayUrl must be a single valid URL value"
 }
 
+check(
+    runCatching { URI(catalogUrl) }
+        .getOrNull()
+        ?.let {
+            it.scheme in setOf("http", "https") &&
+                it.host != null &&
+                it.userInfo == null &&
+                it.query == null &&
+                it.fragment == null &&
+                it.path.endsWith('/')
+        } == true
+) {
+    "omniandCatalogUrl must be an absolute HTTP(S) URL ending with /"
+}
+
 val buildPlatformShell by
     tasks.registering(Exec::class) {
         workingDir(webProject)
@@ -183,7 +205,7 @@ android {
         versionName = "0.1.0"
         buildConfigField("String", "PLATFORM_HOST", "\"$platformHost\"")
         buildConfigField("String", "RELAY_URL", "\"${relayUrl.replace("\"", "\\\"")}\"")
-        buildConfigField("String", "CATALOG_URL", "\"http://192.168.1.11:5173/\"")
+        buildConfigField("String", "CATALOG_URL", "\"${catalogUrl.replace("\"", "\\\"")}\"")
     }
 
     buildFeatures { buildConfig = true }

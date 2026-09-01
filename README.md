@@ -94,7 +94,10 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 Open **OmniAnd** from the user's normal Android launcher. Installing an application that declares SMS capabilities starts or defers the required Android role and permission setup. Declining setup leaves the Web application installed, and Messages reports actionable API errors when a required permission or role is missing.
 
-The development catalog URL is configured with `CATALOG_URL` in `app/build.gradle.kts`. Its current HTTP value is intended only for trusted local development; production-like deployments should use HTTPS.
+The catalog root is configured by Gradle property `omniandCatalogUrl` or environment variable
+`OMNIAND_CATALOG_URL`; it retains the trusted-LAN development default when neither is set. The URL
+must be absolute and end in `/`. Production-like deployments must use trusted HTTPS, for example
+`https://catalog.phone.example.net/`.
 
 ## Relay integration
 
