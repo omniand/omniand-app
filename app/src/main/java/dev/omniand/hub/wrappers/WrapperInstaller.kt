@@ -40,7 +40,7 @@ import org.json.JSONObject
  * copied under assets/webapp and are later served by OmniAnd without loading wrapper code.
  */
 object WrapperInstaller {
-    private const val NOTIFICATION_RELAY_VERSION = 2
+    private const val NOTIFICATION_RELAY_VERSION = 1
     private const val TEMPLATE_PACKAGE =
         "dev.omniand.generated.placeholderxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
     private const val TEMPLATE_LABEL =
@@ -84,8 +84,11 @@ object WrapperInstaller {
             )
             .put("protocolVersion", version)
             .put("notificationsPermission", notificationsPermission)
-            .put("permissionRequired", info != null && version == 1 && !notificationsPermission)
-            .put("updateAvailable", info != null && version != 1)
+            .put(
+                "permissionRequired",
+                info != null && version == NOTIFICATION_RELAY_VERSION && !notificationsPermission,
+            )
+            .put("updateAvailable", info != null && version != NOTIFICATION_RELAY_VERSION)
     }
 
     fun isTrustedWrapper(context: Context, appId: String): Boolean =

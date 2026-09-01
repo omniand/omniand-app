@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit
 /** Publishes app-owned notifications through the trusted generated wrapper for that app. */
 object WrapperNotificationRelay {
     private const val SERVICE = "dev.omniand.wrapper.runtime.NotificationRelayService"
-    private const val DESCRIPTOR = "dev.omniand.wrapper.NOTIFICATIONS/2"
+    private const val DESCRIPTOR = "dev.omniand.wrapper.NOTIFICATIONS/1"
 
     fun publish(
         context: Context,

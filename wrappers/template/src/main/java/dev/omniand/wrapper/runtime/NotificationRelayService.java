@@ -7,7 +7,6 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
-import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.os.Binder;
 import android.os.Build;
@@ -15,7 +14,6 @@ import android.os.IBinder;
 import android.os.Parcel;
 import android.os.RemoteException;
 import androidx.core.app.NotificationCompat;
-import java.security.MessageDigest;
 
 /**
  * Private Binder endpoint through which the Platform asks a generated wrapper to own its
@@ -23,9 +21,8 @@ import java.security.MessageDigest;
  * certificate; malformed payloads fail without publishing a notification.
  */
 public final class NotificationRelayService extends Service {
-    private static final String DESCRIPTOR = "dev.omniand.wrapper.NOTIFICATIONS/2";
+    private static final String DESCRIPTOR = "dev.omniand.wrapper.NOTIFICATIONS/1";
     private String appId;
-    private String platformCertificate;
 
     @Override
     public void onCreate() {
@@ -35,7 +32,6 @@ public final class NotificationRelayService extends Service {
                     getPackageManager()
                             .getApplicationInfo(getPackageName(), PackageManager.GET_META_DATA);
             appId = info.metaData.getString("dev.omniand.APP_ID");
-            platformCertificate = info.metaData.getString("dev.omniand.PLATFORM_CERT");
         } catch (Exception ignored) {
             stopSelf();
         }
@@ -103,31 +99,8 @@ public final class NotificationRelayService extends Service {
     private boolean trustedCaller() {
         String[] packages = getPackageManager().getPackagesForUid(Binder.getCallingUid());
         if (packages == null) return false;
-        for (String name : packages)
-            if ("dev.omniand.launcher".equals(name)
-                    && platformCertificate.equals(fingerprint(name))) return true;
+        for (String name : packages) if (PlatformTrust.isTrusted(this, name)) return true;
         return false;
-    }
-
-    @SuppressWarnings("deprecation")
-    private String fingerprint(String packageName) {
-        try {
-            int flags =
-                    Build.VERSION.SDK_INT >= 28
-                            ? PackageManager.GET_SIGNING_CERTIFICATES
-                            : PackageManager.GET_SIGNATURES;
-            PackageInfo info = getPackageManager().getPackageInfo(packageName, flags);
-            byte[] certificate =
-                    Build.VERSION.SDK_INT >= 28
-                            ? info.signingInfo.getApkContentsSigners()[0].toByteArray()
-                            : info.signatures[0].toByteArray();
-            byte[] digest = MessageDigest.getInstance("SHA-256").digest(certificate);
-            StringBuilder value = new StringBuilder();
-            for (byte item : digest) value.append(String.format("%02x", item));
-            return value.toString();
-        } catch (Exception error) {
-            return "";
-        }
     }
 
     private boolean publish(

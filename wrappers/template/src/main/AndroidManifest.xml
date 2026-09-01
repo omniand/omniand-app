@@ -11,7 +11,7 @@
             android:value="OMNIAND_APP_ID_PLACEHOLDER_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" />
         <meta-data
             android:name="dev.omniand.RELAY_VERSION"
-            android:value="2" />
+            android:value="1" />
         <meta-data
             android:name="dev.omniand.PLATFORM_CERT"
             android:value="OMNIAND_PLATFORM_CERT_PLACEHOLDER_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" />
@@ -23,6 +23,9 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name="dev.omniand.wrapper.runtime.NotificationPermissionActivity"
+            android:exported="true" />
         <service
             android:name="dev.omniand.wrapper.runtime.NotificationRelayService"
             android:exported="true" />

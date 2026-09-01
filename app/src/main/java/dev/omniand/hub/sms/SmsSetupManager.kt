@@ -11,6 +11,7 @@ import android.os.Build
 import android.provider.Telephony
 import dev.omniand.hub.settings.PendingSetup
 import dev.omniand.hub.wrappers.WrapperInstaller
+import dev.omniand.hub.wrappers.WrapperNotificationPermission
 import org.json.JSONObject
 
 object SmsSetupManager {
@@ -87,6 +88,7 @@ object SmsSetupManager {
 class SmsSetupActivity : Activity() {
     private var roleRequested = false
     private var explanationShown = false
+    private var wrapperPermissionRequested = false
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,7 +98,10 @@ class SmsSetupActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        if (roleRequested) requestPermissionsForCapabilities()
+        if (roleRequested) {
+            roleRequested = false
+            requestPermissionsForCapabilities()
+        }
     }
 
     private fun showExplanation() {
@@ -145,7 +150,7 @@ class SmsSetupActivity : Activity() {
             permissions.distinct().filter {
                 checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
             }
-        if (missing.isEmpty()) finishSetup()
+        if (missing.isEmpty()) requestWrapperNotificationPermission()
         else requestPermissions(missing.toTypedArray(), PERMISSION_REQUEST)
     }
 
@@ -155,12 +160,31 @@ class SmsSetupActivity : Activity() {
         results: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, results)
-        if (requestCode == PERMISSION_REQUEST) finishSetup()
+        if (requestCode == PERMISSION_REQUEST) requestWrapperNotificationPermission()
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == ROLE_REQUEST) requestPermissionsForCapabilities()
+        when (requestCode) {
+            ROLE_REQUEST -> {
+                roleRequested = false
+                requestPermissionsForCapabilities()
+            }
+            WRAPPER_NOTIFICATION_REQUEST -> finishSetup()
+        }
+    }
+
+    private fun requestWrapperNotificationPermission() {
+        if (wrapperPermissionRequested) return
+        wrapperPermissionRequested = true
+        if (
+            !WrapperNotificationPermission.request(
+                this,
+                "messages",
+                WRAPPER_NOTIFICATION_REQUEST,
+            )
+        )
+            finishSetup()
     }
 
     private fun finishSetup() {
@@ -171,5 +195,6 @@ class SmsSetupActivity : Activity() {
     companion object {
         private const val ROLE_REQUEST = 71
         private const val PERMISSION_REQUEST = 72
+        private const val WRAPPER_NOTIFICATION_REQUEST = 73
     }
 }
