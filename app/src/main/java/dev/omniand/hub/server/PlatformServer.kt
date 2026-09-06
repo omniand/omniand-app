@@ -1647,7 +1647,23 @@ object PlatformServer {
                 CspBuilder.build(app),
             )
         } catch (_: Exception) {
-            error(404, "Not found")
+            if (relative.startsWith("assets/")) return error(404, "Not found")
+            runCatching {
+                    PlatformContent(
+                        "200 OK",
+                        "text/html; charset=utf-8",
+                        desktopDocument(
+                            WebAppRegistry.openAsset(context, app, "index.html"),
+                            "index.html",
+                            app,
+                            isLocalWebView,
+                            requestAuthority,
+                            languageTags,
+                        ),
+                        CspBuilder.build(app),
+                    )
+                }
+                .getOrElse { error(404, "Not found") }
         }
     }
 
