@@ -19,6 +19,7 @@ import java.net.Socket
 import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -40,6 +41,7 @@ class RelayTunnelClient(
     private val relayUrl: String,
 ) {
     private val streams = ConcurrentHashMap<Long, LocalStream>()
+    private val highestOpenedStreamId = AtomicLong(0)
     private val stopped = AtomicBoolean(false)
     private val client =
         HttpClient(OkHttp) {
@@ -119,6 +121,7 @@ class RelayTunnelClient(
                     header("X-OmniAnd-Device-Id", deviceId)
                 }
             ) {
+                highestOpenedStreamId.set(0)
                 TunnelState.update("connected", null)
                 val output = Channel<ByteArray>(capacity = 64)
                 coroutineScope {
@@ -154,13 +157,13 @@ class RelayTunnelClient(
         when (frame) {
             is TunnelFrame.Open -> open(frame.streamId, output)
             is TunnelFrame.Data -> {
-                val local = stream(frame.streamId)
+                val local = stream(frame.streamId) ?: return
                 local.receiveWindow.consume(frame.payload.size)
                 local.incoming.send(StreamEvent.Data(frame.payload))
             }
-            is TunnelFrame.Fin -> stream(frame.streamId).incoming.send(StreamEvent.Fin)
+            is TunnelFrame.Fin -> stream(frame.streamId)?.incoming?.send(StreamEvent.Fin)
             is TunnelFrame.Reset -> streams.remove(frame.streamId)?.close()
-            is TunnelFrame.WindowUpdate -> stream(frame.streamId).credit.release(frame.credit)
+            is TunnelFrame.WindowUpdate -> stream(frame.streamId)?.credit?.release(frame.credit)
             is TunnelFrame.Ping ->
                 output.send(TunnelProtocol.encode(TunnelFrame.Pong(frame.payload)))
             is TunnelFrame.Pong -> Unit
@@ -169,6 +172,7 @@ class RelayTunnelClient(
 
     /** Opens one bounded loopback stream, or explicitly resets it when local setup fails. */
     private suspend fun open(streamId: Long, output: Channel<ByteArray>) {
+        highestOpenedStreamId.updateAndGet { previous -> maxOf(previous, streamId) }
         if (streams.size >= TUNNEL_MAX_STREAMS || streams.containsKey(streamId)) {
             output.send(TunnelProtocol.encode(TunnelFrame.Reset(streamId)))
             return
@@ -254,8 +258,10 @@ class RelayTunnelClient(
         }
     }
 
-    private fun stream(streamId: Long): LocalStream =
-        streams[streamId] ?: error("frame references an unknown stream")
+    private fun stream(streamId: Long): LocalStream? =
+        streams[streamId]
+            ?: if (isRetiredStreamId(streamId, highestOpenedStreamId.get())) null
+            else error("frame references an unknown stream")
 
     private class LocalStream(val socket: Socket) {
         val incoming = Channel<StreamEvent>(capacity = 32)
@@ -358,3 +364,6 @@ internal object RetryBackoff {
     fun fullJitterMillis(attempt: Int): Long =
         kotlin.random.Random.nextLong(maximumMillis(attempt) + 1)
 }
+
+internal fun isRetiredStreamId(streamId: Long, highestOpenedStreamId: Long): Boolean =
+    streamId in 1..highestOpenedStreamId
