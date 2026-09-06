@@ -95,30 +95,22 @@ class FilesService(private val context: Context) {
         limit: Int,
         sort: String,
         direction: String,
+        secondarySort: String,
+        secondaryDirection: String,
     ): JSONObject {
         if (
             offset < 0 ||
                 limit !in 1..200 ||
-                sort !in setOf("name", "size", "modified") ||
-                direction !in setOf("asc", "desc")
+                sort !in setOf("name", "size", "modified", "type") ||
+                direction !in setOf("asc", "desc") ||
+                secondarySort !in setOf("name", "size", "modified") ||
+                secondaryDirection !in setOf("asc", "desc")
         )
             throw Invalid("invalid-query")
         val parent = resolve(parentId, directory = true)
-        val comparator =
-            when (sort) {
-                "size" ->
-                    compareBy<File> { it.length() }
-                        .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
-                "modified" ->
-                    compareBy<File> { it.lastModified() }
-                        .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
-                else -> compareBy(String.CASE_INSENSITIVE_ORDER) { it.name }
-            }
+        val comparator = fileComparator(sort, direction, secondarySort, secondaryDirection)
         val entries =
-            parent.file
-                .listFiles()
-                ?.filter(::visible)
-                ?.sortedWith(if (direction == "desc") comparator.reversed() else comparator)
+            parent.file.listFiles()?.filter(::visible)?.sortedWith(comparator)
                 ?: throw Invalid("not-readable")
         FilesEventBroadcaster.watch(parent.file)
         val page = entries.drop(offset).take(limit + 1)
@@ -486,6 +478,33 @@ class FilesService(private val context: Context) {
         private const val PREFS = "files-state"
         private const val FAVORITES = "favorites"
         private const val RECENTS = "recents"
+
+        /** Creates the stable ordering shared by every page of a directory listing. */
+        internal fun fileComparator(
+            sort: String,
+            direction: String,
+            secondarySort: String,
+            secondaryDirection: String,
+        ): Comparator<File> {
+            fun directed(comparator: Comparator<File>, value: String) =
+                if (value == "desc") comparator.reversed() else comparator
+
+            fun field(value: String): Comparator<File> =
+                when (value) {
+                    "size" -> compareBy<File> { it.length() }
+                    "modified" -> compareBy<File> { it.lastModified() }
+                    else -> compareBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+                }
+
+            val name = compareBy(String.CASE_INSENSITIVE_ORDER) { file: File -> file.name }
+            if (sort != "type") return directed(field(sort).then(name), direction)
+            val type =
+                compareBy(String.CASE_INSENSITIVE_ORDER) { file: File ->
+                    if (file.isDirectory) "0" else "1${file.extension}"
+                }
+            return directed(type, direction)
+                .then(directed(field(secondarySort).then(name), secondaryDirection))
+        }
 
         internal fun normalize(path: String): String {
             if (path.startsWith('/') || path.contains('\u0000') || path.contains('\\'))

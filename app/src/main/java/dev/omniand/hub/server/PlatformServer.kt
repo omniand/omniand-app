@@ -402,6 +402,8 @@ object PlatformServer {
                     query["limit"]?.toIntOrNull() ?: 100,
                     query["sort"] ?: "name",
                     query["direction"] ?: "asc",
+                    query["secondarySort"] ?: "name",
+                    query["secondaryDirection"] ?: "asc",
                 )
             }
         if (path == "/api/files/search" && method == "GET")
