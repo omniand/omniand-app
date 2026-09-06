@@ -16,6 +16,10 @@ class FilesAuthorizationTest {
             PlatformServer.requiredFilesCapability("GET", "/api/files/entries/opaque/content"),
         )
         assertEquals(
+            "files.read",
+            PlatformServer.requiredFilesCapability("GET", "/api/files/entries/opaque/thumbnail"),
+        )
+        assertEquals(
             "files.write",
             PlatformServer.requiredFilesCapability("POST", "/api/files/folders"),
         )

@@ -22,7 +22,7 @@ object CspBuilder {
                 "style-src 'self' 'unsafe-inline'",
                 "img-src 'self' data:",
                 "connect-src 'self'",
-                "frame-src 'none'",
+                if (app.id == "files") "frame-src 'self'" else "frame-src 'none'",
                 "base-uri 'none'",
                 "form-action 'self'",
                 "object-src 'none'",

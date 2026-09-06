@@ -222,6 +222,7 @@ object KtorServer {
             get("/entries") { call.forward(context) }
             get("/entries/{id}") { call.forward(context) }
             get("/entries/{id}/content") { call.forward(context) }
+            get("/entries/{id}/thumbnail") { call.forward(context) }
             get("/search") { call.forward(context) }
             get("/recents") { call.forward(context) }
             get("/favorites") { call.forward(context) }

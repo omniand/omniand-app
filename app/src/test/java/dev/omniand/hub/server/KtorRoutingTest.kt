@@ -30,6 +30,7 @@ class KtorRoutingTest {
                 "/api/files/setup",
                 "/api/files/roots",
                 "/api/files/entries/a%2Fb/content",
+                "/api/files/entries/a%2Fb/thumbnail",
                 "/api/files/jobs/a%2Fb",
                 "/api/sms/messages/a%2Fb",
                 "/api/apps/web",

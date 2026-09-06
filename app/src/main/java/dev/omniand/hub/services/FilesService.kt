@@ -1,11 +1,17 @@
 package dev.omniand.hub.services
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.media.ThumbnailUtils
 import android.os.Build
 import android.os.storage.StorageManager
+import android.provider.MediaStore
+import android.util.Size
 import android.webkit.MimeTypeMap
 import dev.omniand.hub.files.FilesEventBroadcaster
 import dev.omniand.hub.files.FilesSetupManager
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -138,6 +144,41 @@ class FilesService(private val context: Context) {
             safeName(resolved.file.name),
             resolved.file.lastModified(),
         )
+    }
+
+    /** Decodes a bounded image preview while avoiding full-resolution bitmap allocation. */
+    fun thumbnail(id: String): ByteArray {
+        val resolved = resolve(id, directory = false)
+        val type = mime(resolved.file.name)
+        if (!resolved.file.isFile || !(type.startsWith("image/") || type.startsWith("video/")))
+            throw Invalid("not-previewable")
+        val bitmap =
+            (if (Build.VERSION.SDK_INT >= 29) {
+                runCatching {
+                        if (type.startsWith("video/"))
+                            ThumbnailUtils.createVideoThumbnail(resolved.file, Size(512, 512), null)
+                        else
+                            ThumbnailUtils.createImageThumbnail(resolved.file, Size(512, 512), null)
+                    }
+                    .getOrNull()
+            } else if (type.startsWith("video/")) {
+                @Suppress("DEPRECATION")
+                ThumbnailUtils.createVideoThumbnail(
+                    resolved.file.absolutePath,
+                    MediaStore.Video.Thumbnails.MINI_KIND,
+                )
+            } else {
+                sampledBitmap(resolved.file)
+            }) ?: throw Invalid("thumbnail-failed")
+        return try {
+            ByteArrayOutputStream().use { output ->
+                if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 82, output))
+                    throw Invalid("thumbnail-failed")
+                output.toByteArray()
+            }
+        } finally {
+            bitmap.recycle()
+        }
     }
 
     /** Runs a bounded recursive name search without following symbolic links. */
@@ -478,6 +519,18 @@ class FilesService(private val context: Context) {
         private const val PREFS = "files-state"
         private const val FAVORITES = "favorites"
         private const val RECENTS = "recents"
+
+        private fun sampledBitmap(file: File): Bitmap? {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+            var sample = 1
+            while (bounds.outWidth / sample > 1024 || bounds.outHeight / sample > 1024) sample *= 2
+            return BitmapFactory.decodeFile(
+                file.absolutePath,
+                BitmapFactory.Options().apply { inSampleSize = sample },
+            )
+        }
 
         /** Creates the stable ordering shared by every page of a directory listing. */
         internal fun fileComparator(

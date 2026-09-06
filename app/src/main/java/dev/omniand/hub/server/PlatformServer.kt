@@ -473,6 +473,13 @@ object PlatformServer {
                 URLDecoder.decode(filesContentMatch.groupValues[1], "UTF-8"),
                 headers["range"],
             )
+        val filesThumbnailMatch = Regex("^/api/files/entries/([^/]+)/thumbnail$").matchEntire(path)
+        if (filesThumbnailMatch != null && method == "GET")
+            return filesThumbnail(
+                context,
+                app,
+                URLDecoder.decode(filesThumbnailMatch.groupValues[1], "UTF-8"),
+            )
         val filesEntry = Regex("^/api/files/entries/([^/]+)$").matchEntire(path)
         if (filesEntry != null && method == "GET")
             return filesRead(context, app) {
@@ -1177,6 +1184,25 @@ object PlatformServer {
                 resource.mimeType,
                 { LimitedInputStream(resource.stream, length) },
                 responseHeaders,
+            )
+        } catch (error: FilesService.Invalid) {
+            val status =
+                if (error.code in setOf("files-access-required", "protected-path")) 403
+                else if (error.code == "not-found") 404 else 400
+            codedError(status, error.code, filesMessage(error.code))
+        }
+    }
+
+    /** Returns a bounded JPEG preview without transferring the full image to Web clients. */
+    private fun filesThumbnail(context: Context, app: WebApp?, id: String): PlatformContent {
+        if (!PermissionManager.hasCapability(context, app?.id, "files.read"))
+            return codedError(403, "missing-capability", "Missing capability: files.read")
+        return try {
+            PlatformContent.bytes(
+                "200 OK",
+                "image/jpeg",
+                FilesService(context).thumbnail(id),
+                mapOf("Cache-Control" to "private, max-age=300"),
             )
         } catch (error: FilesService.Invalid) {
             val status =
