@@ -1649,11 +1649,12 @@ object PlatformServer {
         } catch (_: Exception) {
             if (relative.startsWith("assets/")) return error(404, "Not found")
             runCatching {
+                    val index = WebAppRegistry.openAsset(context, app, "index.html")
                     PlatformContent(
                         "200 OK",
                         "text/html; charset=utf-8",
                         desktopDocument(
-                            WebAppRegistry.openAsset(context, app, "index.html"),
+                            rootRelativeAppAssets(index),
                             "index.html",
                             app,
                             isLocalWebView,
@@ -1666,6 +1667,14 @@ object PlatformServer {
                 .getOrElse { error(404, "Not found") }
         }
     }
+
+    /** Makes fallback documents load their app assets from the origin root on deep URLs. */
+    private fun rootRelativeAppAssets(bytes: ByteArray): ByteArray =
+        bytes
+            .toString(Charsets.UTF_8)
+            .replace("src=\"./assets/", "src=\"/assets/")
+            .replace("href=\"./assets/", "href=\"/assets/")
+            .toByteArray(Charsets.UTF_8)
 
     private fun desktopDocument(
         bytes: ByteArray,
