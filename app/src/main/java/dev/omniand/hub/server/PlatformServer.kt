@@ -13,6 +13,7 @@ import dev.omniand.hub.camera.CameraSessionManager
 import dev.omniand.hub.camera.CameraSetupActivity
 import dev.omniand.hub.contacts.ContactsEventBroadcaster
 import dev.omniand.hub.contacts.ContactsSetupManager
+import dev.omniand.hub.files.FilesChunkManager
 import dev.omniand.hub.files.FilesEventBroadcaster
 import dev.omniand.hub.files.FilesJobManager
 import dev.omniand.hub.files.FilesSetupManager
@@ -438,6 +439,56 @@ object PlatformServer {
             return filesWrite(context, app) {
                 val document = requireJson(headers, body)
                 it.rename(document.requiredString("id", 4096), document.requiredString("name", 255))
+            }
+        if (path == "/api/files/write-text" && method == "POST")
+            return filesWrite(context, app) {
+                val document = requireJson(headers, body)
+                it.writeText(
+                    document.requiredString("parent", 4096),
+                    document.requiredString("name", 255),
+                    document.requiredString("content", FilesService.MAX_TEXT_WRITE),
+                    document.optBoolean("overwrite", false),
+                )
+            }
+        if (path == "/api/files/file-ids" && method == "POST")
+            return filesRead(context, app) {
+                val document = requireJson(headers, body)
+                val paths = document.requiredStringArray("paths")
+                it.fileIds(
+                    document.requiredString("root", 4096),
+                    List(paths.length()) { paths.getString(it) },
+                )
+            }
+        if (path == "/api/files/chunks" && method == "POST")
+            return filesWrite(context, app) {
+                val document = requireJson(headers, body)
+                FilesChunkManager.create(
+                    context,
+                    app!!.id,
+                    document.requiredString("parent", 4096),
+                    document.requiredString("name", 255),
+                    document.optLong("size", -1),
+                    document.requiredString("sha256", 128),
+                    document.optInt("totalChunks", -1),
+                    document.optLong("chunkSize", -1),
+                    document.optionalString("conflict") ?: "fail",
+                )
+            }
+        val chunkStatus = Regex("^/api/files/chunks/([^/]+)$").matchEntire(path)
+        if (chunkStatus != null && method in setOf("GET", "DELETE"))
+            return filesWrite(context, app) {
+                val id = URLDecoder.decode(chunkStatus.groupValues[1], "UTF-8")
+                if (method == "DELETE") FilesChunkManager.delete(context, app!!.id, id)
+                else FilesChunkManager.status(context, app!!.id, id)
+            }
+        val chunkComplete = Regex("^/api/files/chunks/([^/]+)/complete$").matchEntire(path)
+        if (chunkComplete != null && method == "POST")
+            return filesWrite(context, app) {
+                FilesChunkManager.complete(
+                    context,
+                    app!!.id,
+                    URLDecoder.decode(chunkComplete.groupValues[1], "UTF-8"),
+                )
             }
         if (path == "/api/files/jobs" && method == "POST") {
             if (!PermissionManager.hasCapability(context, app?.id, "files.write"))
@@ -1096,6 +1147,8 @@ object PlatformServer {
         when {
             path in setOf("/api/files/setup", "/api/files/setup/request") -> null
             !path.startsWith("/api/files/") -> null
+            path == "/api/files/file-ids" -> "files.read"
+            path == "/api/files/chunks" || path.startsWith("/api/files/chunks/") -> "files.write"
             path == "/api/files/jobs" || path.startsWith("/api/files/jobs/") -> "files.write"
             method == "GET" -> "files.read"
             else -> "files.write"

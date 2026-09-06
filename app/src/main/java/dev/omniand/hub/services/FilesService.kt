@@ -3,12 +3,14 @@ package dev.omniand.hub.services
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.media.ThumbnailUtils
 import android.os.Build
 import android.os.storage.StorageManager
 import android.provider.MediaStore
 import android.util.Size
 import android.webkit.MimeTypeMap
+import androidx.exifinterface.media.ExifInterface
 import dev.omniand.hub.files.FilesEventBroadcaster
 import dev.omniand.hub.files.FilesSetupManager
 import java.io.ByteArrayOutputStream
@@ -17,6 +19,7 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.Locale
@@ -88,7 +91,18 @@ class FilesService(private val context: Context) {
                             .put("id", encode(root.id, ""))
                             .put("name", root.name)
                             .put("removable", root.removable)
+                            .put(
+                                "state",
+                                if (root.directory.canRead()) "mounted" else "unavailable",
+                            )
+                            .put("remote", false)
+                            .put("alias", root.name)
                             .put("free", root.directory.usableSpace)
+                            .put(
+                                "used",
+                                (root.directory.totalSpace - root.directory.freeSpace)
+                                    .coerceAtLeast(0),
+                            )
                             .put("total", root.directory.totalSpace)
                     }
                 ),
@@ -130,7 +144,46 @@ class FilesService(private val context: Context) {
     fun details(id: String): JSONObject {
         val resolved = resolve(id)
         touch(id)
-        return entryJson(resolved)
+        return entryJson(resolved).put("metadata", metadata(resolved.file))
+    }
+
+    /** Writes a bounded UTF-8 text file using the same safe name and conflict rules as uploads. */
+    fun writeText(
+        parentId: String,
+        name: String,
+        content: String,
+        overwrite: Boolean,
+    ): JSONObject {
+        if (content.toByteArray(StandardCharsets.UTF_8).size > MAX_TEXT_WRITE)
+            throw Invalid("file-too-large")
+        val parent = resolve(parentId, directory = true)
+        val destination = child(parent, name)
+        if (destination.exists() && !overwrite) throw Invalid("conflict")
+        val temporary = File(parent.file, ".omniand-${UUID.randomUUID()}.tmp")
+        try {
+            temporary.outputStream().use { it.write(content.toByteArray(StandardCharsets.UTF_8)) }
+            if (destination.exists() && !destination.delete()) throw Invalid("replace-failed")
+            if (!temporary.renameTo(destination)) throw Invalid("write-failed")
+        } finally {
+            temporary.delete()
+        }
+        FilesEventBroadcaster.publish()
+        return entryJson(parent.root, destination)
+    }
+
+    /**
+     * Resolves MediaStore's indexed ID for filesystem paths without exposing the path to Web code.
+     */
+    fun fileIds(rootId: String, paths: List<String>): JSONArray {
+        if (paths.size > 100) throw Invalid("too-many-paths")
+        val root = resolve(rootId, directory = true)
+        return JSONArray(
+            paths.map { path ->
+                val normalized = normalize(path)
+                val file = File(root.file, normalized)
+                if (!file.exists()) JSONObject.NULL else mediaId(file)
+            }
+        )
     }
 
     fun content(id: String): Resource {
@@ -379,14 +432,24 @@ class FilesService(private val context: Context) {
                 .relativize(file.toPath())
                 .toString()
                 .replace(File.separatorChar, '/')
+        val created = creationTime(file)
         return JSONObject()
             .put("id", encode(root.id, relative))
             .put("rootId", encode(root.id, ""))
             .put("name", if (relative.isEmpty()) root.name else file.name)
             .put("directory", file.isDirectory)
-            .put("size", if (file.isFile) file.length() else JSONObject.NULL)
+            .put("size", if (file.isFile) file.length() else 0)
             .put("modified", file.lastModified())
+            .put("created", created)
+            .put("createdAt", created)
+            .put("updatedAt", file.lastModified())
             .put("mimeType", if (file.isFile) mime(file.name) else JSONObject.NULL)
+            .put("permission", if (file.canWrite()) "rw" else "r")
+            .put("canRead", file.canRead())
+            .put("canWrite", file.canWrite())
+            .put("canDelete", file != root.directory && file.canWrite())
+            .put("children", if (file.isDirectory) file.listFiles()?.count(::visible) ?: 0 else 0)
+            .put("mediaId", mediaId(file))
             .put(
                 "favorite",
                 prefs()
@@ -515,6 +578,7 @@ class FilesService(private val context: Context) {
 
     companion object {
         const val MAX_UPLOAD_SIZE = 2L * 1024 * 1024 * 1024
+        const val MAX_TEXT_WRITE = 256 * 1024
         private const val MAX_SEARCH_ENTRIES = 10_000
         private const val PREFS = "files-state"
         private const val FAVORITES = "favorites"
@@ -612,5 +676,77 @@ class FilesService(private val context: Context) {
             }
             return digest.digest().joinToString("") { "%02x".format(it) }
         }
+    }
+
+    private fun creationTime(file: File): Any {
+        return runCatching {
+                Files.readAttributes(file.toPath(), BasicFileAttributes::class.java)
+                    .creationTime()
+                    .toMillis()
+            }
+            .getOrNull() ?: JSONObject.NULL
+    }
+
+    private fun mediaId(file: File): Any {
+        if (!file.isFile) return ""
+        val projection =
+            arrayOf(MediaStore.Files.FileColumns._ID, MediaStore.Files.FileColumns.DATA)
+        return runCatching {
+                context.contentResolver
+                    .query(
+                        MediaStore.Files.getContentUri("external"),
+                        projection,
+                        "${MediaStore.Files.FileColumns.DATA} = ?",
+                        arrayOf(file.absolutePath),
+                        null,
+                    )
+                    ?.use { cursor ->
+                        if (cursor.moveToFirst()) cursor.getLong(0).toString() else ""
+                    } ?: ""
+            }
+            .getOrDefault("")
+    }
+
+    /** Returns platform metadata only when Android can decode it without loading the media body. */
+    private fun metadata(file: File): JSONObject {
+        val result = JSONObject()
+        if (!file.isFile) return result
+        runCatching {
+            ExifInterface(file).let { exif ->
+                exif
+                    .getAttributeInt(ExifInterface.TAG_IMAGE_WIDTH, -1)
+                    .takeIf { it >= 0 }
+                    ?.let { result.put("width", it) }
+                exif
+                    .getAttributeInt(ExifInterface.TAG_IMAGE_LENGTH, -1)
+                    .takeIf { it >= 0 }
+                    ?.let { result.put("height", it) }
+                exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)?.let {
+                    result.put("dateTaken", it)
+                }
+            }
+        }
+        runCatching {
+            MediaMetadataRetriever().use { retriever ->
+                retriever.setDataSource(file.absolutePath)
+                val keys =
+                    mapOf(
+                        MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH to "width",
+                        MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT to "height",
+                        MediaMetadataRetriever.METADATA_KEY_DURATION to "duration",
+                        MediaMetadataRetriever.METADATA_KEY_ARTIST to "artist",
+                        MediaMetadataRetriever.METADATA_KEY_ALBUM to "album",
+                        MediaMetadataRetriever.METADATA_KEY_TITLE to "title",
+                    )
+                keys.forEach { (key, name) ->
+                    retriever.extractMetadata(key)?.let { value ->
+                        if (name in setOf("width", "height", "duration"))
+                            value.toLongOrNull()?.let { result.put(name, it) }
+                        else result.put(name, value)
+                    }
+                }
+            }
+        }
+        return result
     }
 }

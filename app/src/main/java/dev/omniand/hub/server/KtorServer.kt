@@ -4,6 +4,7 @@ import android.content.Context
 import dev.omniand.hub.BuildConfig
 import dev.omniand.hub.camera.CameraSessionManager
 import dev.omniand.hub.camera.CameraSignalValidator
+import dev.omniand.hub.files.FilesChunkManager
 import dev.omniand.hub.media.MediaUploadStore
 import dev.omniand.hub.pairing.DeviceIdentity
 import dev.omniand.hub.pairing.RemoteLinkSession
@@ -230,6 +231,13 @@ object KtorServer {
             get("/events") { call.forward(context) }
             post("/folders") { call.forward(context) }
             post("/rename") { call.forward(context) }
+            post("/write-text") { call.forward(context) }
+            post("/file-ids") { call.forward(context) }
+            post("/chunks") { call.forward(context) }
+            get("/chunks/{id}") { call.forward(context) }
+            delete("/chunks/{id}") { call.forward(context) }
+            put("/chunks/{id}/{index}") { call.receiveFileChunk(context) }
+            post("/chunks/{id}/complete") { call.forward(context) }
             post("/jobs") { call.forward(context) }
             get("/jobs/{id}") { call.forward(context) }
             delete("/jobs/{id}") { call.forward(context) }
@@ -615,6 +623,42 @@ object KtorServer {
             respondJson(400, "invalid-upload", "Invalid multipart upload")
         } finally {
             temporary.delete()
+        }
+    }
+
+    /** Receives one bounded raw chunk after authenticating the owning Files capability. */
+    private suspend fun ApplicationCall.receiveFileChunk(context: Context) {
+        val headers = request.platformHeaders()
+        val requestContext =
+            PlatformServer.authenticateRequest(
+                context,
+                request.headers["Host"].orEmpty(),
+                request.local.remoteAddress,
+                request.httpMethod.value,
+                request.uri.substringBefore('?'),
+                headers,
+            )
+        if (requestContext == null) {
+            respondJson(401, "authentication-required", "Unauthorized")
+            return
+        }
+        if (!PlatformServer.hasCapability(context, requestContext, "files.write")) {
+            respondJson(403, "missing-capability", "Missing capability: files.write")
+            return
+        }
+        val id = parameters["id"].orEmpty()
+        val index = parameters["index"]?.toIntOrNull()
+        if (requestContext.app == null || index == null) {
+            respondJson(400, "invalid-chunk", "Invalid upload chunk")
+            return
+        }
+        try {
+            val bytes = receiveChannel().toByteArray(16 * 1024 * 1024 + 1)
+            if (bytes.size > 16 * 1024 * 1024) throw FilesService.Invalid("chunk-too-large")
+            FilesChunkManager.writeChunk(context, requestContext.app.id, id, index, bytes)
+            respondJson(HttpStatusCode.OK, JSONObject().put("accepted", true).put("index", index))
+        } catch (error: FilesService.Invalid) {
+            respondJson(400, error.code, "Invalid upload chunk")
         }
     }
 
