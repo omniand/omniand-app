@@ -59,6 +59,7 @@ class DeviceIdentity(private val context: Context) {
             .putString(RELAY_URL, relayUrl)
             .putString(BASE_HOST, baseHost.lowercase())
             .commit()
+        dev.omniand.hub.background.WakeRegistration.enqueue(context)
     }
 
     fun connectOrigin(): String? = preferences.getString(CONNECT_ORIGIN, null)

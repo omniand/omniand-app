@@ -22,7 +22,7 @@ public final class MainActivity extends Activity {
                             .getApplicationInfo(getPackageName(), PackageManager.GET_META_DATA);
             String appId = info.metaData.getString("dev.omniand.APP_ID");
             Intent platform = new Intent();
-            platform.setClassName("dev.omniand.launcher", "dev.omniand.hub.WebAppActivity");
+            platform.setClassName("net.omniand.app", "dev.omniand.hub.WebAppActivity");
             platform.putExtra("appId", appId);
             String route = getIntent().getStringExtra("route");
             String threadId = getIntent().getStringExtra("threadId");

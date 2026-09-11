@@ -299,9 +299,16 @@ object PlatformServer {
         if (path == "/api/hub/settings/background-hosting" && method == "PUT") {
             if (!isLocalPlatformHome)
                 return codedError(403, "phone-local-required", "Hub settings are phone-local")
-            val enabled = requireJson(headers, body).requiredBoolean("enabled")
-            BackgroundHostingManager.setEnabled(context, enabled)
-            if (enabled) BackgroundHostingManager.requestAccess(context)
+            val request = requireJson(headers, body)
+            val mode = request.optString("mode", "")
+            if (mode !in setOf("disabled", "on-demand", "always-on"))
+                return codedError(
+                    400,
+                    "invalid-hosting-mode",
+                    "Choose disabled, on-demand, or always-on",
+                )
+            BackgroundHostingManager.setMode(context, mode)
+            if (mode != "disabled") BackgroundHostingManager.requestAccess(context)
             return json(200, HubSettingsManager.state(context).getJSONObject("backgroundHosting"))
         }
         if (path == "/api/hub/connect-computer" && method == "POST") {

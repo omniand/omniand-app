@@ -9,7 +9,7 @@ import java.security.MessageDigest;
 
 /** Verifies that a wrapper entry point was invoked by the Platform build that generated it. */
 final class PlatformTrust {
-    private static final String PLATFORM_PACKAGE = "dev.omniand.launcher";
+    private static final String PLATFORM_PACKAGE = "net.omniand.app";
 
     private PlatformTrust() {}
 

@@ -45,6 +45,11 @@
         android:roundIcon="@mipmap/ic_launcher"
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="true">
+        <service android:name=".background.WakeMessagingService" android:exported="false">
+            <intent-filter><action android:name="com.google.firebase.MESSAGING_EVENT" /></intent-filter>
+        </service>
+        <activity android:name=".background.WakeConfirmationActivity" android:exported="false" />
+        <receiver android:name=".background.SessionTimeoutReceiver" android:exported="false" />
         <activity
             android:name=".MainActivity"
             android:configChanges="keyboardHidden|orientation|screenSize"

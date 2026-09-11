@@ -2,7 +2,6 @@
 
 OmniAnd is a normal Android application that hosts a Web application platform. It does not replace Android's HOME launcher. Android supplies capabilities behind same-origin HTTP APIs; Web content uses standard browser APIs and has no JavaScript/native bridge.
 
-The current implementation status and remaining engineering work are tracked in [`STATUS.md`](STATUS.md).
 
 ## Architecture
 

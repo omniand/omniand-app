@@ -19,7 +19,6 @@ import android.provider.Settings
 import androidx.core.content.ContextCompat
 import dev.omniand.hub.MainActivity
 import dev.omniand.hub.R
-import dev.omniand.hub.camera.CameraSessionManager
 import dev.omniand.hub.pairing.DeviceIdentity
 import dev.omniand.hub.server.PlatformServer
 import dev.omniand.hub.tunnel.RelayTunnelClient
@@ -31,6 +30,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 /** Persists opt-in hosting and coordinates its foreground-service lifecycle. */
 object BackgroundHostingManager {
@@ -39,8 +40,85 @@ object BackgroundHostingManager {
 
     @Volatile private var serviceRunning = false
 
-    fun isEnabled(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(ENABLED, false)
+    fun mode(context: Context): String {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        return prefs.getString("mode", null)
+            ?: if (prefs.getBoolean(ENABLED, false)) "always-on" else "disabled"
+    }
+
+    // Legacy startup callers restore only permanent hosting.
+    fun isEnabled(context: Context): Boolean = mode(context) == "always-on"
+
+    @Volatile private var temporary = false
+    private val inactivity = SessionInactivityPolicy()
+
+    fun isTemporarySession(): Boolean = temporary
+
+    fun setMode(context: Context, mode: String) {
+        require(mode in setOf("disabled", "on-demand", "always-on"))
+        context
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString("mode", mode)
+            .apply()
+        stopSession(context)
+        if (mode == "always-on") start(context)
+        WakeRegistration.enqueue(context)
+    }
+
+    fun approveSession(context: Context) {
+        check(mode(context) == "on-demand")
+        if (temporary) return
+        temporary = true
+        inactivity.start(android.os.SystemClock.elapsedRealtime())
+        try {
+            start(context)
+        } catch (error: Exception) {
+            temporary = false
+            throw error
+        }
+    }
+
+    fun stopSession(context: Context) {
+        temporary = false
+        inactivity.stop()
+        sessionAlarm(context, null)
+        context.stopService(Intent(context, BackgroundHostingService::class.java))
+    }
+
+    /** Presence changes reset only the absence deadline; tunnel reconnects never touch it. */
+    @Synchronized
+    fun presenceChanged(context: Context) {
+        if (!temporary) return
+        inactivity.presence(
+            PresenceTracker.connectedClients(),
+            android.os.SystemClock.elapsedRealtime(),
+        )
+        sessionAlarm(context, inactivity.deadline())
+    }
+
+    fun checkInactivity(context: Context) {
+        if (temporary && inactivity.expired(android.os.SystemClock.elapsedRealtime()))
+            stopSession(context)
+    }
+
+    private fun sessionAlarm(context: Context, deadline: Long?) {
+        val alarm = context.getSystemService(android.app.AlarmManager::class.java)
+        val pending =
+            PendingIntent.getBroadcast(
+                context,
+                7403,
+                Intent(context, SessionTimeoutReceiver::class.java),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        alarm.cancel(pending)
+        if (deadline != null)
+            alarm.setAndAllowWhileIdle(
+                android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                deadline,
+                pending,
+            )
+    }
 
     fun isServiceRunning(): Boolean = serviceRunning
 
@@ -51,22 +129,7 @@ object BackgroundHostingManager {
 
     /** Applies the preference immediately; disabling also tears down every active lease. */
     fun setEnabled(context: Context, enabled: Boolean) {
-        val transition = BackgroundHostingPreferenceTransition.from(isEnabled(context), enabled)
-        context
-            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit()
-            .putBoolean(ENABLED, enabled)
-            .apply()
-        when (transition) {
-            BackgroundHostingPreferenceTransition.ENABLE,
-            BackgroundHostingPreferenceTransition.KEEP_ENABLED -> start(context)
-            BackgroundHostingPreferenceTransition.DISABLE,
-            BackgroundHostingPreferenceTransition.KEEP_DISABLED -> {
-                PresenceTracker.releaseWakeLock()
-                CameraSessionManager.instance(context).stop()
-                context.stopService(Intent(context, BackgroundHostingService::class.java))
-            }
-        }
+        setMode(context, if (enabled) "always-on" else "disabled")
     }
 
     fun start(context: Context) {
@@ -93,11 +156,14 @@ object BackgroundHostingManager {
 
     internal fun serviceStarted(context: Context) {
         serviceRunning = true
+        presenceChanged(context)
         PresenceTracker.refreshWakeLock(context)
     }
 
     internal fun serviceStopped() {
         serviceRunning = false
+        temporary = false
+        inactivity.stop()
         PresenceTracker.releaseWakeLock()
     }
 }
@@ -142,9 +208,10 @@ object PresenceTracker {
 
     @Synchronized
     fun refreshWakeLock(context: Context) {
+        BackgroundHostingManager.presenceChanged(context)
         if (
             !policy.shouldHold(
-                BackgroundHostingManager.isEnabled(context),
+                BackgroundHostingManager.mode(context) != "disabled",
                 BackgroundHostingManager.isServiceRunning(),
             )
         ) {
@@ -244,6 +311,9 @@ class BackgroundHostingService : Service() {
         super.onCreate()
         createChannel()
         startForeground(NOTIFICATION_ID, notification())
+    }
+
+    private fun startHosting() {
         serverAvailable = PlatformServer.start(applicationContext)
         if (serverAvailable) {
             tunnelClient =
@@ -261,15 +331,31 @@ class BackgroundHostingService : Service() {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
+        tunnelScope.launch {
+            while (isActive) {
+                kotlinx.coroutines.delay(1000)
+                BackgroundHostingManager.checkInactivity(applicationContext)
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (!serverAvailable) return START_NOT_STICKY
         if (intent?.action == ACTION_STOP) {
-            BackgroundHostingManager.setEnabled(this, false)
+            if (BackgroundHostingManager.isTemporarySession())
+                BackgroundHostingManager.stopSession(this)
+            else BackgroundHostingManager.setEnabled(this, false)
             stopSelf()
             return START_NOT_STICKY
         }
+        if (
+            !BackgroundHostingManager.isEnabled(this) &&
+                !BackgroundHostingManager.isTemporarySession()
+        ) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        if (!serverAvailable) startHosting()
+        if (!serverAvailable) return START_NOT_STICKY
         if (intent?.action == ACTION_RECONNECT) {
             tunnelClient?.stop()
             tunnelClient =
@@ -281,11 +367,7 @@ class BackgroundHostingService : Service() {
                     )
                     .also { it.start() }
         }
-        if (!BackgroundHostingManager.isEnabled(this)) {
-            stopSelf()
-            return START_NOT_STICKY
-        }
-        return START_STICKY
+        return if (BackgroundHostingManager.isTemporarySession()) START_NOT_STICKY else START_STICKY
     }
 
     override fun onDestroy() {
@@ -316,12 +398,24 @@ class BackgroundHostingService : Service() {
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_hub_foreground)
             .setContentTitle("OmniAnd server is available")
-            .setContentText("Desktop clients can connect while background hosting is enabled.")
+            .setContentText(
+                if (BackgroundHostingManager.isTemporarySession())
+                    "Remote session ends after five minutes without desktop clients."
+                else "Desktop clients can connect while background hosting is enabled."
+            )
             .setContentIntent(open)
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
             .addAction(Notification.Action.Builder(null, "Open Hub", open).build())
-            .addAction(Notification.Action.Builder(null, "Stop hosting", stop).build())
+            .addAction(
+                Notification.Action.Builder(
+                        null,
+                        if (BackgroundHostingManager.isTemporarySession()) "Stop session"
+                        else "Stop hosting",
+                        stop,
+                    )
+                    .build()
+            )
             .build()
     }
 
@@ -427,5 +521,12 @@ class NotificationSetupActivity : Activity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         finish()
+    }
+}
+
+/** Rechecks the monotonic deadline after Doze; stale alarms cannot stop a connected session. */
+class SessionTimeoutReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent?) {
+        BackgroundHostingManager.checkInactivity(context)
     }
 }

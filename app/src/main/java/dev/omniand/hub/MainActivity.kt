@@ -69,6 +69,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        dev.omniand.hub.background.WakeRegistration.enqueue(this)
         if (BackgroundHostingManager.isEnabled(this)) BackgroundHostingManager.start(this)
         isActive = true
         activeInstance = this

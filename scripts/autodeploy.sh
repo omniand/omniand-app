@@ -5,7 +5,7 @@ set -o pipefail
 
 readonly PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly APK="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
-readonly ACTIVITY="dev.omniand.launcher/dev.omniand.hub.MainActivity"
+readonly ACTIVITY="net.omniand.app/dev.omniand.hub.MainActivity"
 readonly ENV_FILE="$PROJECT_DIR/.env"
 
 load_env() {

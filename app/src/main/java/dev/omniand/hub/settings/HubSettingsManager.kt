@@ -36,7 +36,11 @@ object HubSettingsManager {
 
     fun state(context: Context): JSONObject {
         val notifications =
-            Build.VERSION.SDK_INT < 33 || granted(context, Manifest.permission.POST_NOTIFICATIONS)
+            (Build.VERSION.SDK_INT < 33 ||
+                granted(context, Manifest.permission.POST_NOTIFICATIONS)) &&
+                context
+                    .getSystemService(android.app.NotificationManager::class.java)
+                    .areNotificationsEnabled()
         val identity = DeviceIdentity(context)
         val connectOrigin =
             identity.connectOrigin() ?: "https://connect.${BuildConfig.PLATFORM_HOST}"
@@ -72,6 +76,12 @@ object HubSettingsManager {
                 "backgroundHosting",
                 JSONObject()
                     .put("enabled", BackgroundHostingManager.isEnabled(context))
+                    .put("mode", BackgroundHostingManager.mode(context))
+                    .put(
+                        "fcmReadiness",
+                        dev.omniand.hub.background.WakeRegistration.readiness(context),
+                    )
+                    .put("temporarySession", BackgroundHostingManager.isTemporarySession())
                     .put("serviceRunning", BackgroundHostingManager.isServiceRunning())
                     .put("batteryExempt", BackgroundHostingManager.isBatteryExempt(context))
                     .put("wakeLockActive", PresenceTracker.isWakeLockHeld()),

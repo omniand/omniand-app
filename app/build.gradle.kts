@@ -198,7 +198,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "dev.omniand.launcher"
+        applicationId = "net.omniand.app"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
@@ -255,6 +255,10 @@ tasks
     }
 
 dependencies {
+    implementation(platform("com.google.firebase:firebase-bom:34.19.0"))
+    implementation("com.google.firebase:firebase-messaging")
+    implementation("androidx.work:work-runtime-ktx:2.10.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
     implementation("androidx.core:core:1.15.0")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation("androidx.activity:activity-ktx:1.10.1")
@@ -277,3 +281,6 @@ dependencies {
     testImplementation("org.json:json:20240303")
     testImplementation("org.mockito:mockito-core:5.21.0")
 }
+
+// Builds without a Firebase project remain usable with Disabled and Always on hosting.
+if (file("google-services.json").isFile) apply(plugin = "com.google.gms.google-services")
